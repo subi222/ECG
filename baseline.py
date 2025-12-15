@@ -12,6 +12,7 @@ Minimal, memory-efficient ECG processor — JSON → processed ECG (no UI)
 """
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple, Optional, List
 import numpy as np
@@ -22,7 +23,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.linalg import solveh_banded
 from scipy.ndimage import uniform_filter1d, percentile_filter
 
-from non.calibration import profiler_report, profiled
+from calibration import profiler_report, profiled
 
 try:
     import neurokit2 as nk  # type: ignore[import]
@@ -382,66 +383,173 @@ def roi_adaptive_mix(y_qvri_out, y_med_out, wins, fs, gamma=0.5, corr_min=0.15):
 # -----------------------------
 # Baseline core (Hybrid BL++)
 # -----------------------------
-@profiled()
 def baseline_asls_masked(y, lam=1e6, p=0.008, niter=10, mask=None,
-                         decim_for_baseline=1, use_float32=True, ws: Optional[ECGWorkspace]=None):
-    dt = np.float32 if use_float32 else np.float64
+                         decim_for_baseline=1, use_float32=False, ws: Optional[ECGWorkspace]=None):
+    #  DEBUG 제어 함수 (local helper)
+    def dprint(*args, **kwargs):
+        if DEBUG:
+            print(*args, **kwargs)
+
+    # 여기: 강제로 float64 사용 (수치 안정성 우선)
+    dt = np.float64
     y = np.asarray(y, dtype=dt)
     N = y.size
+
+    dprint("\n[ASLS] ================= baseline_asls_masked 호출 =================")
+    dprint(f"[ASLS] y length={N}, lam={lam}, p={p}, niter={niter}, decim={decim_for_baseline}")
+
     if N < 3:
+        dprint("[ASLS] N < 3 → zero 반환")
         return np.zeros_like(y)
 
+    # ----------------------------------------------------
+    # ① Decimation 처리
+    # ----------------------------------------------------
     if decim_for_baseline > 1:
         q = int(decim_for_baseline)
         n = (N // q) * q
         if n < q:
             return np.zeros_like(y)
+
         y_head = y[:n]
-        # 평균 다운샘플(뷰→reshape은 카피 없이 가능)
+
+        dprint(f"[ASLS] Decimated call — q={q}, n={n}")
+
         y_ds = y_head.reshape(-1, q).mean(axis=1, dtype=dt)
-        z_ds = baseline_asls_masked(y_ds, lam=lam, p=p, niter=niter, mask=None,
-                                    decim_for_baseline=1, use_float32=False, ws=ws)
-        # 업샘플: repeat view 활용
+
+        # ⬇ 재귀 호출 (여기도 float64 유지)
+        z_ds = baseline_asls_masked(
+            y_ds, lam=lam, p=p, niter=niter, mask=None,
+            decim_for_baseline=1, use_float32=False, ws=ws
+        )
+
         idx = np.repeat(np.arange(z_ds.size), q)
         z_coarse = z_ds[idx]
+
         if z_coarse.size < N:
             z = np.empty(N, dtype=dt)
             z[:z_coarse.size] = z_coarse
             z[z_coarse.size:] = z_coarse[-1]
         else:
             z = z_coarse[:N]
+
+        dprint("[ASLS] Decimation upsample 완료")
         return z.astype(np.float64, copy=False)
 
+    # ----------------------------------------------------
+    # ② 본격 ASLS 계산
+    # ----------------------------------------------------
     g = np.ones(N, dtype=dt) if mask is None else np.where(mask, 1.0, 1e-3).astype(dt)
     lam = dt(lam)
-    ab_u = (ws.band_matrix(N, lam, dtype=dt) if ws is not None else
-            np.vstack([np.r_[np.zeros(2, dt), lam*np.ones(N-2, dt)],
-                       np.r_[np.zeros(1, dt), -4*lam*np.ones(N-1, dt)],
-                       6*lam*np.ones(N, dt)]))
-    w  = np.ones(N, dtype=dt)
-    z  = np.zeros(N, dtype=dt)
+
+    if ws is not None:
+        ab_u = ws.band_matrix(N, lam, dtype=dt)
+        dprint("[ASLS] Using ws.band_matrix() (float64)")
+    else:
+        dprint("[ASLS] Using fallback band_matrix generation (float64)")
+        ab_u = np.vstack([
+            np.r_[np.zeros(2, dt), lam*np.ones(N-2, dt)],
+            np.r_[np.zeros(1, dt), -4*lam*np.ones(N-1, dt)],
+            6*lam*np.ones(N, dt)
+        ])
+
+    w = np.ones(N, dtype=dt)
+    z = np.zeros(N, dtype=dt)
     last_obj = None
 
-    for _ in range(int(niter)):
+    dprint(f"[ASLS] 초기 행렬 ab_u shape={ab_u.shape}")
+
+    # ----------------------------------------------------
+    # ③ 반복 실행
+    # ----------------------------------------------------
+    for it in range(int(niter)):
+        dprint(f"\n[ASLS] ----- Iteration {it+1}/{niter} -----")
+
         wg = w * g
-        ab_u[2, :] = 6.0*lam + wg  # diag 수정 (in-place)
-        b = wg * y                 # rhs
-        z = solveh_banded(ab_u, b, lower=False, overwrite_ab=False,
-                          overwrite_b=True, check_finite=False)
-        # 가중치 업데이트 (in-place 불가 → 재할당 최소화)
+
+        # 대각 업데이트 (중요!)
+        ab_u[2, :] = 6.0*lam + wg
+
+        # solveh_banded 우변
+        b = wg * y
+
+        dprint("[ASLS] solveh_banded 호출 직전")
+        dprint("  - ab_u shape:", ab_u.shape)
+        dprint("  - ab_u diag stats:",
+              "min=", float(ab_u[2].min()),
+              "max=", float(ab_u[2].max()),
+              "mean=", float(ab_u[2].mean()))
+        dprint("  - contains NaN? ab_u:", np.isnan(ab_u).any(), ", b:", np.isnan(b).any())
+        dprint(f"  - lam={lam}, p={p}")
+
+        # ------------------------------------------------
+        # ④ solveh_banded 안전 실행 + 예외 처리
+        # ------------------------------------------------
+        try:
+            z = solveh_banded(
+                ab_u, b,
+                lower=False,
+                overwrite_ab=False,
+                overwrite_b=True,
+                check_finite=False
+            )
+        except np.linalg.LinAlgError as e:
+            dprint("\n[ASLS ERROR] solveh_banded 실패!")
+            dprint("  - Error:", str(e))
+            dprint("  - ab_u diag min/max:",
+                  float(ab_u[2].min()), float(ab_u[2].max()))
+            dprint("  - y stats: mean=", float(y.mean()), ", std=", float(y.std()))
+            dprint("  - b stats: mean=", float(b.mean()), ", std=", float(b.std()))
+
+            # ------------------------------------------------
+            # ⑤ 응급처치: 대각선에 epsilon 추가해 재시도
+            # ------------------------------------------------
+            eps = 1e-6
+            dprint(f"[ASLS] Retry: add eps={eps} to diagonal")
+
+            ab_u_perturbed = ab_u.copy()
+            ab_u_perturbed[2, :] += eps
+
+            try:
+                z = solveh_banded(
+                    ab_u_perturbed, b,
+                    lower=False,
+                    overwrite_ab=False,
+                    overwrite_b=True,
+                    check_finite=False
+                )
+                dprint("[ASLS] Perturbed diagonal solve 성공!")
+            except Exception as e2:
+                dprint("[ASLS] Perturbed diagonal도 실패 → 예외 재전달")
+                raise e2
+
+        # ------------------------------------------------
+        # ⑥ 가중치 업데이트
+        # ------------------------------------------------
         w = p * (y > z) + (1.0 - p) * (y <= z)
 
-        # 수렴 체크(저비용)
+        # ------------------------------------------------
+        # ⑦ 수렴 체크
+        # ------------------------------------------------
         r = y - z
         data_term = float((wg * r).dot(r))
         d2 = np.diff(z, n=2, prepend=float(z[0]), append=float(z[-1]))
         reg_term = float(lam) * float(d2.dot(d2))
         obj = data_term + reg_term
+
+        dprint(f"[ASLS] obj={obj}, data_term={data_term}, reg_term={reg_term}")
+
         if last_obj is not None and abs(last_obj - obj) <= 1e-5 * max(1.0, obj):
+            dprint("[ASLS] 수렴 판정 → break")
             break
+
         last_obj = obj
 
+    dprint("[ASLS] 완료 → return baseline")
     return z.astype(np.float64, copy=False)
+
+
+
 
 @profiled()
 def rr_isoelectric_clamp(y, fs, r_idx=None, t0_ms=80, t1_ms=300):
@@ -623,15 +731,18 @@ def _qvri_residual_isoelectric(
     return y_qvri, baseline_qvri
 
 
+
+
 # -----------------------------
 # PUBLIC API
 # -----------------------------
-@profiled()
+DEBUG = False
+
 def process_ecg_from_json(json_path: str,
                           fs_raw: float,
                           fs_target: float = 250.0,
                           return_time: bool = False):
-    ws = ECGWorkspace(fs=fs_target, dtype=np.float64)
+    ws = ECGWorkspace(fs=fs_target, dtype=np.float32)
 
     data = json.loads(Path(json_path).read_text(encoding='utf-8'))
     ecg_raw = extract_ecg(data)
@@ -640,12 +751,29 @@ def process_ecg_from_json(json_path: str,
     # dtype 고정 (한 번만)
     ecg_raw = np.asarray(ecg_raw, dtype=np.float32)
 
+    # 🔎 STEP 0: 원본 신호 정보
+    if DEBUG:
+        print("[STEP 0] raw ecg",
+              "shape=", ecg_raw.shape,
+              "fs_raw=", fs_raw,
+              "mean=", float(np.mean(ecg_raw)),
+              "std=", float(np.std(ecg_raw)))
+
     # 리샘플
     decim = max(1, int(round(float(fs_raw) / float(fs_target))))
     ecg = decimate_if_needed(ecg_raw, decim).astype(np.float32, copy=False)
     fs = float(fs_target)
     if return_time:
         t = np.arange(ecg.size, dtype=np.float32) / fs
+
+    # 🔎 STEP 1: 리샘플된 신호
+    if DEBUG:
+        print("[STEP 1] after decimate",
+              "decim=", decim,
+              "target_fs=", fs,
+              "shape=", ecg.shape,
+              "mean=", float(np.mean(ecg)),
+              "std=", float(np.std(ecg)))
 
     # 1) Hybrid BL++ (캐시 사용)
     y_corr, base = baseline_hybrid_plus_adaptive(
@@ -658,14 +786,37 @@ def process_ecg_from_json(json_path: str,
         rr_cap_enable=False, ws=ws
     )
 
+    # 🔎 STEP 2: Hybrid BL++ 결과
+    if DEBUG:
+        print("[STEP 2] after baseline_hybrid_plus_adaptive",
+              "y_corr shape=", y_corr.shape,
+              "y_corr mean=", float(np.mean(y_corr)),
+              "y_corr std=", float(np.std(y_corr)),
+              "base mean=", float(np.mean(base)),
+              "base std=", float(np.std(base)))
+
     # 1.5) 잔류 오프셋 제거 (out 사용)
     baseline_short = signal.medfilt(y_corr, kernel_size=101).astype(np.float32, copy=False)
     y_corr_eq = np.empty_like(y_corr, dtype=np.float32)
     np.subtract(y_corr, baseline_short, out=y_corr_eq)
 
+    # 🔎 STEP 2.5: median 기반 오프셋 제거
+    if DEBUG:
+        print("[STEP 2.5] after median offset removal",
+              "baseline_short mean=", float(np.mean(baseline_short)),
+              "y_corr_eq mean=", float(np.mean(y_corr_eq)),
+              "y_corr_eq std=", float(np.std(y_corr_eq)))
+
     # 2) R-peak
     detector = rPeakDetector(fs=int(fs))
     r_after = detector.rPeakDetection(y_corr_eq)
+
+    # 🔎 STEP 3: R-peak 검출 결과
+    if DEBUG:
+        print("[STEP 3] R-peak detection",
+              "num_R=", int(len(r_after)))
+        if len(r_after) > 0:
+            print("        first 5 R idx:", r_after[:5])
 
     # 3) QVRi
     wins_protect = build_protect_windows(r_after, fs, y_corr.size,
@@ -676,6 +827,14 @@ def process_ecg_from_json(json_path: str,
         protect_windows=wins_protect, w_protect=1e-6
     )
 
+    # 🔎 STEP 4: QVRi 보정 결과
+    if DEBUG:
+        print("[STEP 4] after QVRi",
+              "y_corr_qvri mean=", float(np.mean(y_corr_qvri)),
+              "y_corr_qvri std=", float(np.std(y_corr_qvri)),
+              "base_qvri mean=", float(np.mean(base_qvri)),
+              "base_qvri std=", float(np.std(base_qvri)))
+
     # 4) ROI 보정 + 적응혼합 (in-place)
     roi_wins = build_roi_windows(r_after, fs, y_corr.size,
                                  p_win=(-220, -100), st_win=(+120, +260))
@@ -685,94 +844,319 @@ def process_ecg_from_json(json_path: str,
     y_qvri_edge = np.empty_like(y_corr, dtype=np.float32)
     np.subtract(y_corr, base_qvri_roi, out=y_qvri_edge)
 
+    # 🔎 STEP 4.5: ROI 보정 후 QVRi edge
+    if DEBUG:
+        print("[STEP 4.5] y_qvri_edge (after ROI baseline)",
+              "mean=", float(np.mean(y_qvri_edge)),
+              "std=", float(np.std(y_qvri_edge)))
+
     y_med_base = signal.medfilt(y_corr, kernel_size=101).astype(np.float32, copy=False)
     y_med_out  = np.empty_like(y_corr, dtype=np.float32)
     np.subtract(y_corr, y_med_base, out=y_med_out)
 
-    roi_adaptive_mix(y_qvri_out=y_qvri_edge, y_med_out=y_med_out, wins=roi_wins, fs=fs, gamma=0.5, corr_min=0.15)
+    # 🔎 STEP 4.7: median 기반 신호
+    if DEBUG:
+        print("[STEP 4.7] y_med_out (median-based)",
+              "mean=", float(np.mean(y_med_out)),
+              "std=", float(np.std(y_med_out)))
+
+    roi_adaptive_mix(y_qvri_out=y_qvri_edge, y_med_out=y_med_out,
+                     wins=roi_wins, fs=fs, gamma=0.5, corr_min=0.15)
+
+    # 🔎 STEP 4.8: adaptive mix 이후 (y_qvri_edge가 in-place로 바뀜)
+    if DEBUG:
+        print("[STEP 4.8] after roi_adaptive_mix",
+              "y_qvri_edge mean=", float(np.mean(y_qvri_edge)),
+              "y_qvri_edge std=", float(np.std(y_qvri_edge)))
 
     # 5) R 보존 평활 (out 활용)
-    y_final = smooth_preserve_r(y_qvri_edge, fs=fs, target_fs=100, ws=ws, out=None).astype(np.float32, copy=False)
+    y_final = smooth_preserve_r(y_qvri_edge, fs=fs, target_fs=100,
+                                ws=ws, out=None).astype(np.float32, copy=False)
+
+    # 🔎 STEP 5: 최종 출력
+    if DEBUG:
+        print("[STEP 5] final output",
+              "shape=", y_final.shape,
+              "target_fs=100",
+              "mean=", float(np.mean(y_final)),
+              "std=", float(np.std(y_final)))
 
     return (t, y_final) if return_time else y_final
 
-import numpy as np
-from scipy import signal
 
-# ... (위에는 baseline.py에 이미 있는 내용 그대로 두고)
-# baseline.py 파일의 process_ecg_array 함수 전체를 이걸로 교체하세요.
+def process_ecg_from_array(ecg_raw,
+                           fs_raw: float,
+                           fs_target: float = 250.0,
+                           return_time: bool = False,
+                           return_debug: bool = False):
+    def dprint(*args, **kwargs):
+        if DEBUG:
+            print(*args, **kwargs)
 
-def process_ecg_array(
-    ecg_raw,
-    fs_raw: float,
-    fs_target: float = None,
-    return_time: bool = False,
-):
-    # 1. 초기 설정
-    fs = float(fs_raw)
-    ws = ECGWorkspace(fs=fs, dtype=np.float32)
-    ecg = np.asarray(ecg_raw, dtype=np.float32)
+    """
+    JSON 없이 바로 배열로부터 baseline 제거 전체 파이프라인 실행
+    """
+    dprint("\n===== [START] process_ecg_from_array =====")
 
-    # ==================================================
-    # ⭐ [핵심] 가장자리 효과 방지를 위한 패딩(Padding)
-    # ==================================================
-    pad_len = int(1.0 * fs)  # 1초 분량 패딩
-    ecg_padded = np.pad(ecg, (pad_len, pad_len), mode='reflect')
+    ws = ECGWorkspace(fs=fs_target, dtype=np.float32)
 
-    # 2. 기저선 제거 (패딩된 데이터로 수행)
+    # numpy array 강제 변환
+    ecg_raw = np.asarray(ecg_raw, dtype=np.float32)
+
+    dprint("[STEP 0] Raw ECG Loaded")
+    dprint("  - shape:", ecg_raw.shape)
+    dprint("  - fs_raw:", fs_raw)
+    dprint("  - mean:", float(np.mean(ecg_raw)))
+    dprint("  - std:", float(np.std(ecg_raw)))
+
+    # ----------------------
+    # 1) Decimation 단계
+    # ----------------------
+    decim = max(1, int(round(fs_raw / fs_target)))
+    dprint("\n[STEP 1] Decimation 준비")
+    dprint("  - fs_raw:", fs_raw)
+    dprint("  - fs_target:", fs_target)
+    dprint("  - decimation factor:", decim)
+
+    ecg = decimate_if_needed(ecg_raw, decim).astype(np.float32, copy=False)
+    fs = float(fs_target)
+
+    dprint("[STEP 1-2] After Decimation")
+    dprint("  - shape:", ecg.shape)
+    dprint("  - mean:", float(np.mean(ecg)))
+    dprint("  - std:", float(np.std(ecg)))
+
+    if return_time:
+        t = np.arange(ecg.size, dtype=np.float32) / fs
+        dprint("  - time vector created, length:", len(t))
+
+    # ----------------------
+    # 2) Baseline 제거 메인 엔진
+    # ----------------------
+    dprint("\n[STEP 2] Baseline Hybrid + Adaptive 처리 시작")
     y_corr, base = baseline_hybrid_plus_adaptive(
-        ecg_padded, fs,
+        ecg, fs,
         per_win_s=3.2, per_q=8,
-        asls_lam=5e8, asls_p=0.001, asls_decim=8,
+        asls_lam=8e7, asls_p=0.01, asls_decim=8,
         qrs_aware=True, verylow_fc=0.55,
         vol_win_s=0.8, vol_gain=2.0, lam_floor_ratio=0.5/100.0,
         hard_cut=True, break_pad_s=0.30,
         rr_cap_enable=False, ws=ws
     )
+    dprint("[STEP 2-1] Baseline Removed")
+    dprint("  - y_corr shape:", y_corr.shape)
+    dprint("  - y_corr mean:", float(np.mean(y_corr)))
+    dprint("  - base mean:", float(np.mean(base)))
 
-    # 3. 잔류 오프셋 제거
-    baseline_short = signal.medfilt(y_corr, kernel_size=101).astype(np.float32, copy=False)
-    y_corr_eq = np.empty_like(y_corr, dtype=np.float32)
-    np.subtract(y_corr, baseline_short, out=y_corr_eq)
+    # ----------------------
+    # 3) Median Baseline Equalization
+    # ----------------------
+    dprint("\n[STEP 3] Median Filtering (Kernel=101)")
+    baseline_short = signal.medfilt(y_corr, kernel_size=101)
+    y_corr_eq = y_corr - baseline_short
+    dprint("  - y_corr_eq mean:", float(np.mean(y_corr_eq)))
+    dprint("  - y_corr_eq std:", float(np.std(y_corr_eq)))
 
-    # 4. R-peak 검출
+    # ----------------------
+    # 4) R-peak Detection
+    # ----------------------
+    dprint("\n[STEP 4] R-peak Detection 시작")
     detector = rPeakDetector(fs=int(fs))
     r_after = detector.rPeakDetection(y_corr_eq)
+    dprint("  - detected R peaks:", len(r_after))
 
-    # 5. QVRi (잔여 기저선 정밀 제거)
-    wins_protect = build_protect_windows(
-        r_after, fs, y_corr.size,
-        p_win=(-220, -100), st_win=(+120, +260)
-    )
+    # ----------------------
+    # 5) QVRi Step
+    # ----------------------
+    dprint("\n[STEP 5] QVRi Residual Isoelectric 단계")
+    wins_protect = build_protect_windows(r_after, fs, y_corr.size)
+    dprint("  - protect window count:", len(wins_protect))
+
     y_corr_qvri, base_qvri = _qvri_residual_isoelectric(
         y_corr, fs, r_after,
-        t0_ms=-240, t1_ms=-100, stride=4, lam=5000.0, pin_strength=1e9,
-        protect_windows=wins_protect, w_protect=1e-6
+        protect_windows=wins_protect
     )
+    dprint("  - y_corr_qvri mean:", float(np.mean(y_corr_qvri)))
+    dprint("  - base_qvri mean:", float(np.mean(base_qvri)))
 
-    # 6. ROI 보정
-    roi_wins = build_roi_windows(
-        r_after, fs, y_corr.size,
-        p_win=(-220, -100), st_win=(+120, +260)
-    )
-    base_qvri_roi = roi_pchip_fill_baseline(
-        base_qvri, roi_wins
-    ).astype(np.float32, copy=False)
+    roi_wins = build_roi_windows(r_after, fs, y_corr.size)
+    dprint("  - ROI window count:", len(roi_wins))
 
-    y_final_padded = np.empty_like(y_corr, dtype=np.float32)
-    np.subtract(y_corr, base_qvri_roi, out=y_final_padded)
+    base_qvri_roi = roi_pchip_fill_baseline(base_qvri, roi_wins)
+    y_qvri_edge = y_corr - base_qvri_roi
+    dprint("  - y_qvri_edge std:", float(np.std(y_qvri_edge)))
 
-    # ==================================================
-    # ⭐ [핵심] 패딩 제거 및 0점 조절
-    # ==================================================
-    # 1) 앞뒤에 붙였던 가짜 데이터 잘라내기
-    y_final = y_final_padded[pad_len:-pad_len]
+    # ----------------------
+    # 6) Median-based Adaptive Mixing
+    # ----------------------
+    dprint("\n[STEP 6] Median 기반 adaptive mixing")
+    y_med_base = signal.medfilt(y_corr, kernel_size=101)
+    y_med_out  = y_corr - y_med_base
+    dprint("  - y_med_out std:", float(np.std(y_med_out)))
 
-    # 2) 신호의 중앙값을 0으로 맞추기 (Zero-centering)
-    y_final -= np.median(y_final)
+    roi_adaptive_mix(y_qvri_edge, y_med_out, roi_wins, fs)
 
-    if return_time:
-        t = np.arange(y_final.size, dtype=np.float32) / fs
-        return t, y_final
-    else:
-        return y_final
+    # ----------------------
+    # 7) 최종 smoothing
+    # ----------------------
+    dprint("\n[STEP 7] Smoothing + R-peak preservation")
+    y_final = smooth_preserve_r(y_qvri_edge, fs=fs, target_fs=100)
+    dprint("  - y_final shape:", y_final.shape)
+    dprint("  - y_final mean:", float(np.mean(y_final)))
+    dprint("  - y_final std:", float(np.std(y_final)))
+
+    dprint("===== [END] process_ecg_from_array =====\n")
+
+    # 여기까지 y_final, y_corr, r_after, ecg, fs 등이 이미 계산되어 있다고 가정
+    # 🔍 디버깅용: raw(디시메이션 후) + baseline 제거 결과 + R-peak index 같이 반환
+    if return_debug:
+        if return_time:
+            return t, y_final, ecg, y_corr, r_after
+        else:
+            return y_final, ecg, y_corr, r_after
+
+    # 기존 동작 그대로 유지
+    return (t, y_final) if return_time else y_final
+
+
+    return (t, y_final) if return_time else y_final
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def debug_plot_ecg_with_rpeaks(
+    rec_id: int,
+    ecg_raw: np.ndarray,
+    y_corr: np.ndarray,
+    y_final: np.ndarray,
+    rpeaks: np.ndarray,
+    fs_raw: float = 360.0,
+    fs_target: float = 250.0,
+    start_sec: float = 60.0,
+    duration_sec: float = 10.0,
+):
+    """
+    디버깅용:
+    - ecg_raw : decimation 이후의 raw ECG (process_ecg_from_array에서 받아온 ecg)
+    - y_corr  : baseline_hybrid_plus_adaptive 직후 신호
+    - y_final : 전체 파이프라인 이후 신호
+    - rpeaks  : R-peak sample index (fs_target 기준)
+    """
+
+    # 지금 우리가 받는 ecg_raw / y_corr / y_final / rpeaks 는 모두 fs_target 기준이라고 가정
+    fs = fs_target
+    n_total = ecg_raw.size
+
+    # 확인할 구간 인덱스
+    n_start = int(start_sec * fs)
+    n_end = n_start + int(duration_sec * fs)
+    n_start = max(0, min(n_start, n_total - 1))
+    n_end = max(n_start + 1, min(n_end, n_total))
+
+    t = np.arange(n_total) / fs
+    t_seg = t[n_start:n_end]
+
+    raw_seg   = ecg_raw[n_start:n_end]
+    corr_seg  = y_corr[n_start:n_end]
+    final_seg = y_final[n_start:n_end]
+
+    # 구간 안에 들어오는 R-peak만 사용
+    mask = (rpeaks >= n_start) & (rpeaks < n_end)
+    r_seg_idx = rpeaks[mask]
+    r_seg_t   = r_seg_idx / fs
+    r_seg_y   = final_seg[(r_seg_idx - n_start)]
+
+    plt.figure(figsize=(12, 8))
+
+    # 1) baseline 제거 전(디시메이션 이후 raw)
+    plt.subplot(3, 1, 1)
+    plt.plot(t_seg, raw_seg, label="Raw (after decimation)")
+    plt.title(f"Record {rec_id} - Raw ECG (fs={fs_target} Hz)")
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    plt.legend()
+
+    # 2) baseline 제거 직후
+    plt.subplot(3, 1, 2)
+    plt.plot(t_seg, corr_seg, label="After baseline removal (y_corr)")
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    plt.legend()
+
+    # 3) 최종 신호 + R-peaks
+    plt.subplot(3, 1, 3)
+    plt.plot(t_seg, final_seg, label="Final (y_final)")
+    if r_seg_idx.size > 0:
+        plt.scatter(r_seg_t, r_seg_y, marker="x", s=20, label="R-peaks")
+    plt.xlabel("Time [s]")
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    plt.legend()
+
+    plt.tight_layout()
+    plt.savefig(f"rec_{rec_id}_debug_plot.png", dpi=200)
+    plt.close()
+
+
+
+if __name__ == "__main__":
+    import numpy as np
+
+    # 1) MITDB에서 테스트할 레코드 10개
+    records_100 = [100, 101, 103, 105, 109]
+    records_200 = [200, 201, 203, 207, 208]
+    record_ids = records_100 + records_200
+
+    # 2) MITDB CSV 경로
+    base_dir = "/MITDB_data"
+
+    # 3) 문제 레코드 (R-peak 이상하게 나온 n개)
+    problem_records = [ ]
+
+    # 4) CSV 로딩 함수 (현재 방식과 동일)
+    def load_mitdb_csv(path):
+        data = np.loadtxt(path, delimiter=",", skiprows=1)
+        return data[:, 1]   # MLII 채널 선택
+
+    # 5) 반복 실행
+    for rec in record_ids:
+        csv_path = f"{base_dir}/{rec}.csv"
+
+        print("\n" + "=" * 80)
+        print(f"[RUN] MITDB record {rec}  ({csv_path})")
+
+        try:
+            ecg = load_mitdb_csv(csv_path)
+
+            #  plot을 위해 return_debug=True 로 신호 전체를 받음
+            y_final, ecg_raw, y_corr, r_after = process_ecg_from_array(
+                ecg,
+                fs_raw=360.0,
+                return_time=False,
+                return_debug=False
+            )
+
+            # === 요약 출력 ===
+            print(f"[SUMMARY] record {rec}")
+            print(f"  - input shape : {ecg_raw.shape}")
+            print(f"  - output shape: {y_final.shape}")
+            print(f"  - output mean : {y_final.mean():.3f}")
+            print(f"  - output std  : {y_final.std():.3f}")
+            print(f"  - R-peaks     : {len(r_after)}")
+
+            # === 문제 레코드는 plot로 시각 확인 ===
+            if rec in problem_records:
+                debug_plot_ecg_with_rpeaks(
+                    rec_id=rec,
+                    ecg_raw=ecg_raw,
+                    y_corr=y_corr,
+                    y_final=y_final,
+                    rpeaks=r_after,
+                    fs_raw=360.0,
+                    fs_target=250.0,
+                    start_sec=60.0,
+                    duration_sec=10.0
+                )
+
+        except Exception as e:
+            print(f"[ERROR] record {rec} 처리 중 오류 발생: {e}")
