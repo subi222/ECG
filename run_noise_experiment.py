@@ -1,7 +1,10 @@
+import csv
+
 import numpy as np
 import wfdb
+
 from baseline import process_ecg_from_array
-import csv
+
 
 # =========================================
 # 평가 함수: SNR, NRMSE
@@ -53,6 +56,7 @@ def compute_nrmse(ref, est, mode="std"):
         return np.nan
     return rmse / denom
 
+
 # --- 1) 섞기 ---
 def mix_with_snr(clean, noise, snr_db):
     """
@@ -69,11 +73,11 @@ def mix_with_snr(clean, noise, snr_db):
     s = clean - clean.mean()
     n = noise - noise.mean()
 
-    sig_power = np.mean(s**2)
-    noise_power = np.mean(n**2) + 1e-12  # 0 나눗셈 방지
+    sig_power = np.mean(s ** 2)
+    noise_power = np.mean(n ** 2) + 1e-12  # 0 나눗셈 방지
 
     # 목표 noise 파워 = sig_power / (10^(SNR/10))
-    target_noise_power = sig_power / (10.0**(snr_db / 10.0))
+    target_noise_power = sig_power / (10.0 ** (snr_db / 10.0))
     scale = np.sqrt(target_noise_power / noise_power)
     n_scaled = n * scale
 
@@ -95,7 +99,7 @@ def main():
     snr_db_list = [20, 10, 5, 0]
 
     # ✅ 3) bw 노이즈 로드
-    rec_name = f"{noise_dir}/bw"   # bw.dat / bw.hea
+    rec_name = f"{noise_dir}/bw"  # bw.dat / bw.hea
     sig, fields = wfdb.rdsamp(rec_name)
     noise = sig[:, 0]
 
@@ -160,9 +164,7 @@ def main():
                     f"{nrmse_out:.6f}",
                 ])
 
-
     print(f"\nCSV 결과가 '{out_csv}' 파일로 저장되었습니다.")
-
 
 
 if __name__ == "__main__":

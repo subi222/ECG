@@ -157,7 +157,7 @@ def profiler_report(topn: int = 30):
 # =========================
 # Config
 # =========================
-FILE_PATH = Path('11646C1011258_test5_20250825T112545inPlainText.json')
+FILE_PATH = Path('non/11646C1011258_test5_20250825T112545inPlainText.json')
 FS_RAW = 250.0
 FS = 250.0
 DECIM = max(1, int(round(FS_RAW / FS)))

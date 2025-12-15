@@ -1,18 +1,19 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+
 def save_overlay_3signals(
-    rec_id,
-    snr_db,
-    clean,      # clean_dec
-    noisy,      # mixed_dec
-    denoised,   # y_mixed_dbg (최종 출력)
-    fs=360.0,
-    start_sec=10.0,
-    win_sec=20.0,
+        rec_id,
+        snr_db,
+        clean,  # clean_dec
+        noisy,  # mixed_dec
+        denoised,  # y_mixed_dbg (최종 출력)
+        fs=360.0,
+        start_sec=10.0,
+        win_sec=20.0,
 ):
     start = int(start_sec * fs)
-    end   = int((start_sec + win_sec) * fs)
+    end = int((start_sec + win_sec) * fs)
 
     clean = np.asarray(clean)[start:end]
     noisy = np.asarray(noisy)[start:end]

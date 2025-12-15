@@ -16,7 +16,6 @@ def RMSE(y, y_pred):
     return np.sqrt(np.mean(np.square(y - y_pred)))
 
 
-
 def NRMSE(y, y_pred):
     """
     Normalized RMSE (정규화된 RMSE)
@@ -26,7 +25,6 @@ def NRMSE(y, y_pred):
     # 신호의 범위(Max - Min)로 나누어 정규화
     data_range = np.max(y) - np.min(y)
     return rmse_val / data_range
-
 
 
 def SNR_improvement(y_in, y_out, y_clean):

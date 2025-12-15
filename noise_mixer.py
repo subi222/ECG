@@ -1,7 +1,6 @@
 import numpy as np
 import wfdb
 from scipy.signal import resample
-import os
 
 
 def get_noise(clean_signal, target_snr_db):
