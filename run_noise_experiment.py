@@ -208,6 +208,38 @@ def main():
             f"{nrmse_mean:7.4f} ± {nrmse_std:7.4f}"
         )
 
+    # ==================================================
+    # 7) 요약 결과 CSV로 저장
+    # ==================================================
+    summary_csv = out_csv.replace(".csv", "_summary.csv")
+
+    with open(summary_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "snr_target_db",
+            "output_snr_mean",
+            "output_snr_std",
+            "nrmse_mean",
+            "nrmse_std"
+        ])
+
+        for snr_t in snr_targets:
+            rows = [row for row in data if row[IDX_SNR_TARGET] == snr_t]
+
+            snr_out_vals = np.array([float(r[IDX_SNR_OUT]) for r in rows])
+            nrmse_vals = np.array([float(r[IDX_NRMSE]) for r in rows])
+
+            writer.writerow([
+                snr_t,
+                snr_out_vals.mean(),
+                snr_out_vals.std(),
+                nrmse_vals.mean(),
+                nrmse_vals.std()
+            ])
+
+    print(f"\n요약 결과가 '{summary_csv}' 파일로 저장되었습니다.")
+    return summary_csv
+
 
 if __name__ == "__main__":
     main()
