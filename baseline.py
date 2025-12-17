@@ -12,7 +12,6 @@ Minimal, memory-efficient ECG processor — JSON → processed ECG (no UI)
 """
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple, Optional, List
 import numpy as np
@@ -23,7 +22,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.linalg import solveh_banded
 from scipy.ndimage import uniform_filter1d, percentile_filter
 
-from calibration import profiler_report, profiled
+from non.calibration import profiled
 
 try:
     import neurokit2 as nk  # type: ignore[import]
@@ -1108,7 +1107,7 @@ if __name__ == "__main__":
     record_ids = records_100 + records_200
 
     # 2) MITDB CSV 경로
-    base_dir = "/MITDB_data"
+    base_dir = "MITDB_data"
 
     # 3) 문제 레코드 (R-peak 이상하게 나온 n개)
     problem_records = [ ]
@@ -1133,7 +1132,7 @@ if __name__ == "__main__":
                 ecg,
                 fs_raw=360.0,
                 return_time=False,
-                return_debug=False
+                return_debug=True
             )
 
             # === 요약 출력 ===
