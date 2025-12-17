@@ -1,5 +1,4 @@
 import csv
-
 import numpy as np
 import wfdb
 
@@ -165,6 +164,49 @@ def main():
                 ])
 
     print(f"\nCSV 결과가 '{out_csv}' 파일로 저장되었습니다.")
+
+    # ==================================================
+    # 6) SNR 조건별 평균 ± 표준편차 계산 (논문용 요약)
+    # ==================================================
+    print("\n" + "=" * 80)
+    print("[SUMMARY] Mean ± Std by Target SNR")
+
+    # CSV 다시 읽기
+    data = np.genfromtxt(
+        out_csv,
+        delimiter=",",
+        skip_header=1,
+        dtype=None,
+        encoding="utf-8"
+    )
+
+    # 컬럼 인덱스 (CSV 헤더 순서 기준)
+    IDX_SNR_TARGET = 2
+    IDX_SNR_OUT = 4
+    IDX_NRMSE = 5
+
+    snr_targets = sorted(set(row[IDX_SNR_TARGET] for row in data))
+
+    print(f"{'SNR(dB)':>8} | {'Output SNR (mean±std)':>25} | {'NRMSE (mean±std)':>25}")
+    print("-" * 70)
+
+    for snr_t in snr_targets:
+        rows = [row for row in data if row[IDX_SNR_TARGET] == snr_t]
+
+        snr_out_vals = np.array([float(r[IDX_SNR_OUT]) for r in rows])
+        nrmse_vals = np.array([float(r[IDX_NRMSE]) for r in rows])
+
+        snr_mean = snr_out_vals.mean()
+        snr_std = snr_out_vals.std()
+
+        nrmse_mean = nrmse_vals.mean()
+        nrmse_std = nrmse_vals.std()
+
+        print(
+            f"{snr_t:8.1f} | "
+            f"{snr_mean:6.2f} ± {snr_std:5.2f} dB | "
+            f"{nrmse_mean:7.4f} ± {nrmse_std:7.4f}"
+        )
 
 
 if __name__ == "__main__":
