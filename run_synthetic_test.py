@@ -24,9 +24,7 @@ MITDB_DIR = Path("/home/subi/PycharmProjects/ECG/MITDB_data")
 NSTDB_DIR = Path("/home/subi/PycharmProjects/ECG/noise_data")
 
 
-records_100 = [100, 101, 103, 105, 109]
-records_200 = [200, 201, 203, 207, 208]
-record_ids = records_100 + records_200
+record_ids = [100, 101, 103, 105, 106, 107, 108, 111, 112, 113]
 
 START_SAMPLE = 0       # 모두 동일 조건
 DURATION_SEC = 10
