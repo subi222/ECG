@@ -9,6 +9,8 @@ Minimal, memory-efficient ECG processor — JSON → processed ECG (no UI)
   * np.subtract(..., out=...), in-place 연산
   * 필터/행렬/커널 캐시(ECGWorkspace)
   * interp1d 제거 → np.interp (선형)
+
+  baseline.py를 디버깅한 파일임 상태임
 """
 
 import json
