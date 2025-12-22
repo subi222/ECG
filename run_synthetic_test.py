@@ -2,7 +2,7 @@
 """
 Synthetic ECG Test Script
 - MITDB clean ECG (CSV) + NSTDB baseline wander (로컬 WFDB) 조합
-- SNR levels: 0, 5, 10, 20 dB
+- SNR levels: 0, 5, 10, 15 dB
 - Output performance SNR / RMSE 계산
 - 파형 3장 세트 저장
 """
@@ -23,13 +23,18 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 MITDB_DIR = Path("/home/subi/PycharmProjects/ECG/MITDB_data")
 NSTDB_DIR = Path("/home/subi/PycharmProjects/ECG/noise_data")
 
-TEST_CASES = [
-    {"mitdb": "100", "nstdb": "bw", "start": 0,    "duration": 10, "fs": 360},
-    {"mitdb": "101", "nstdb": "bw", "start": 1000, "duration": 10, "fs": 360},
-    {"mitdb": "103", "nstdb": "bw", "start": 2000, "duration": 10, "fs": 360},
-]
 
-SNR_LEVELS = [0, 5, 10, 20]
+records_100 = [100, 101, 103, 105, 109]
+records_200 = [200, 201, 203, 207, 208]
+record_ids = records_100 + records_200
+
+START_SAMPLE = 0       # 모두 동일 조건
+DURATION_SEC = 10
+FS = 360
+NSTDB_RECORD = "bw"
+
+
+SNR_LEVELS = [0, 5, 10, 15]
 
 
 # ===========================
@@ -38,22 +43,21 @@ SNR_LEVELS = [0, 5, 10, 20]
 def remove_dc(x):
     return x - np.mean(x)
 
-
-def calculate_snr_db_output(clean, processed, remove_mean_clean=True):
+def calculate_snr_db(clean, est, remove_mean_clean=True):
     """
-    Output performance SNR
-    signal = clean ECG
-    noise  = processed - clean
+    General SNR definition
+    signal = clean
+    noise  = est - clean
     """
     clean = np.asarray(clean, dtype=np.float64)
-    processed = np.asarray(processed, dtype=np.float64)
+    est = np.asarray(est, dtype=np.float64)
 
     if remove_mean_clean:
         s = clean - clean.mean()
     else:
         s = clean
 
-    e = processed - clean  # noise (오차)
+    e = est - clean  # noise (오차)
 
     ps = np.mean(s ** 2)
     pe = np.mean(e ** 2)
@@ -61,6 +65,7 @@ def calculate_snr_db_output(clean, processed, remove_mean_clean=True):
     if pe < 1e-12:
         return np.inf
     return 10.0 * np.log10(ps / pe)
+
 
 
 def calculate_rmse(clean, processed):
@@ -116,7 +121,7 @@ def add_baseline_wander_snr(clean_ecg, bw, target_snr_db):
 
     noisy = clean + bw * scale
 
-    actual_snr = calculate_snr_db_output(clean, noisy)
+    actual_snr = calculate_snr_db(clean, noisy)
     return noisy, clean, actual_snr
 
 
@@ -148,16 +153,40 @@ def plot_triplet(clean, noisy, processed, title, fs):
 def run_synthetic_test():
     results = []
 
-    for i, case in enumerate(TEST_CASES, 1):
+    case_idx = 0
+
+    for record in record_ids:
+        case_idx += 1
+
         clean_ecg, fs = load_mitdb_csv(
-            case["mitdb"], case["start"], case["duration"], case["fs"]
-        )
-        bw, _ = load_nstdb_bw(
-            case["nstdb"], case["start"], case["duration"], case["fs"]
+            record,
+            START_SAMPLE,
+            DURATION_SEC,
+            FS
         )
 
+        bw, _ = load_nstdb_bw(
+            NSTDB_RECORD,
+            START_SAMPLE,
+            DURATION_SEC,
+            FS
+        )
+        #plt.figure(figsize=(12, 3))
+        #t = np.arange(len(bw)) / fs
+        #plt.plot(t, bw)
+        #plt.title("Baseline Wander (NSTDB raw)")
+        #plt.xlabel("Time (s)")
+        #plt.ylabel("Amplitude")
+        #plt.grid(True, alpha=0.3)
+        # =========================
+        # 🔍 디버그용: 파일로 저장
+        # =========================
+        #debug_path = OUTPUT_DIR / f"debug_raw_bw_Record{record}.png"
+        #plt.savefig(debug_path, dpi=150, bbox_inches="tight")
+        #plt.close()
+
         for snr in SNR_LEVELS:
-            case_name = f"Case{i}_SNR{snr}dB"
+            case_name = f"Case{record}_SNR{snr}dB"
             print(f"\n[{case_name}]")
 
             noisy, clean_ref, snr_in = add_baseline_wander_snr(
@@ -176,7 +205,7 @@ def run_synthetic_test():
             noisy = noisy[:N]
             processed = processed[:N]
 
-            snr_out = calculate_snr_db_output(clean_ref, processed)
+            snr_out = calculate_snr_db(clean_ref, processed)
             snr_imp = snr_out - snr_in
             rmse = calculate_rmse(clean_ref, processed)
 
@@ -186,8 +215,8 @@ def run_synthetic_test():
             print(f"  RMSE     : {rmse:.6f}")
 
             results.append({
-                "Case": i,
-                "MITDB": case["mitdb"],
+                "Case": case_idx,
+                "MITDB": record,
                 "Target_SNR_dB": snr,
                 "Input_SNR_dB": snr_in,
                 "Output_SNR_dB": snr_out,
@@ -205,6 +234,45 @@ def run_synthetic_test():
     df = pd.DataFrame(results)
     df.to_csv(OUTPUT_DIR / "synthetic_test_results.csv",
               index=False, float_format="%.6f")
+
+    # ===========================
+    # Input SNR별 통계 (mean ± std)
+    # ===========================
+    summary = (
+        df.groupby("Target_SNR_dB")
+          .agg(
+              Output_SNR_mean=("Output_SNR_dB", "mean"),
+              Output_SNR_std=("Output_SNR_dB", "std"),
+              RMSE_mean=("RMSE", "mean"),
+              RMSE_std=("RMSE", "std"),
+          )
+          .reset_index()
+    )
+
+    # 보기 좋게 문자열 컬럼도 추가 (논문/보고용)
+    summary["Output_SNR_mean±std"] = (
+        summary["Output_SNR_mean"].round(2).astype(str)
+        + " ± "
+        + summary["Output_SNR_std"].round(2).astype(str)
+    )
+    summary["RMSE_mean±std"] = (
+        summary["RMSE_mean"].round(2).astype(str)
+        + " ± "
+        + summary["RMSE_std"].round(2).astype(str)
+    )
+
+    # ===========================
+    # raw + summary를 하나의 CSV로 저장
+    # ===========================
+    csv_path = OUTPUT_DIR / "synthetic_test_results.csv"
+
+    with open(csv_path, "w") as f:
+        f.write("# Raw results (per case)\n")
+        df.to_csv(f, index=False, float_format="%.6f")
+        f.write("\n\n")
+        f.write("# Summary by input SNR (mean ± std)\n")
+        summary.to_csv(f, index=False)
+
 
     print("\n✓ CSV saved:", OUTPUT_DIR / "synthetic_test_results.csv")
 
