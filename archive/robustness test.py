@@ -87,8 +87,8 @@ def mix_with_snr(clean, noise, snr_db):
 
 # --- 2) 실제 실험 ---
 def main():
-    base_dir = "/home/subi/PycharmProjects/ECG/MITDB_data"
-    noise_dir = "/home/subi/PycharmProjects/ECG/noise_data"
+    base_dir = "/MITDB_data"
+    noise_dir = "/noise_data"
 
     # ✅ 1) MITDB에서 테스트할 레코드 10개
     records_100 = [100, 101, 103, 105, 109]
