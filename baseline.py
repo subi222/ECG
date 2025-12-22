@@ -22,7 +22,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.linalg import solveh_banded
 from scipy.ndimage import uniform_filter1d, percentile_filter
 
-from non.calibration import profiled
+from archive.calibration import profiled
 
 try:
     import neurokit2 as nk  # type: ignore[import]
