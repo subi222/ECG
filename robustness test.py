@@ -104,7 +104,7 @@ def main():
     noise = sig[:, 0]
 
     # ✅ 4) CSV 파일 열기 (스크립트 있는 폴더에 저장)
-    out_csv = "noise_experiment_results.csv"
+    out_csv = "robustness_noise_metrics.csv"
     with open(out_csv, "w", newline="") as f:
         writer = csv.writer(f)
         # 헤더 한 줄 쓰기
