@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import wfdb
+from scipy.signal import butter, filtfilt
+
 from pathlib import Path
 from baseline_array import process_ecg_array
 
@@ -40,6 +42,30 @@ SNR_LEVELS = [0, 5, 10, 15]
 # ===========================
 def remove_dc(x):
     return x - np.mean(x)
+
+def highpass_filtfilt(x, fs, cutoff_hz=0.5, order=4):
+    """
+    Zero-phase High-Pass Filter (filtfilt)
+    - baseline 제거용 True_Clean 생성에 사용
+    """
+    x = np.asarray(x, dtype=np.float64)
+    nyq = 0.5 * fs
+    wn = cutoff_hz / nyq
+    if wn <= 0 or wn >= 1:
+        raise ValueError(f"Invalid cutoff_hz={cutoff_hz} for fs={fs}")
+    b, a = butter(order, wn, btype="highpass")
+    return filtfilt(b, a, x)
+
+def make_true_clean_from_csv(clean_ecg_csv, fs, cutoff_hz=0.5, order=4, remove_mean=True):
+    """
+    CSV에서 읽은 clean_ecg(사실 baseline 포함 가능)를
+    HPF로 baseline 제거해서 True_Clean으로 만든다.
+    """
+    y = highpass_filtfilt(clean_ecg_csv, fs=fs, cutoff_hz=cutoff_hz, order=order)
+    if remove_mean:
+        y = y - y.mean()
+    return y
+
 
 def calculate_snr_db(clean, est, remove_mean_clean=True):
     """
@@ -128,7 +154,7 @@ def plot_triplet(clean, noisy, processed, title, fs):
     fig, ax = plt.subplots(3, 1, figsize=(14, 9), sharex=True)
 
     ax[0].plot(t, clean)
-    ax[0].set_title("Clean ECG")
+    ax[0].set_title("True Clean ECG (HPF 0.5 Hz)")
     ax[0].grid(True, alpha=0.3)
 
     ax[1].plot(t, noisy)
@@ -187,9 +213,20 @@ def run_synthetic_test():
             case_name = f"Case{record}_SNR{snr}dB"
             print(f"\n[{case_name}]")
 
-            noisy, clean_ref, snr_in = add_baseline_wander_snr(
-                clean_ecg, bw, snr
+            # 1) True_Clean 생성 (HPF 0.5Hz, zero-phase)
+            true_clean = make_true_clean_from_csv(
+                clean_ecg_csv=clean_ecg,
+                fs=fs,
+                cutoff_hz=0.5,
+                order=4,
+                remove_mean=True
             )
+
+            # 2) True_Clean + scaled BW 로 입력 생성
+            noisy, clean_ref, snr_in = add_baseline_wander_snr(
+                true_clean, bw, snr
+            )
+
 
             processed = process_ecg_array(
                 ecg_raw=noisy,
@@ -202,6 +239,11 @@ def run_synthetic_test():
             clean_ref = clean_ref[:N]
             noisy = noisy[:N]
             processed = processed[:N]
+
+            # (optional) polarity 정합: 상관이 음수면 뒤집기
+            corr = np.corrcoef(clean_ref, processed)[0, 1]
+            if np.isfinite(corr) and corr < 0:
+                processed = -processed
 
             snr_out = calculate_snr_db(clean_ref, processed)
             snr_imp = snr_out - snr_in
