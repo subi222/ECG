@@ -21,8 +21,8 @@ from baseline_array import process_ecg_array
 OUTPUT_DIR = Path("./synthetic_results")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-MITDB_DIR = Path("/home/subi/PycharmProjects/ECG/MITDB_data")
-NSTDB_DIR = Path("/home/subi/PycharmProjects/ECG/noise_data")
+MITDB_DIR = Path("./MITDB_data")
+NSTDB_DIR = Path("./noise_data")
 
 record_ids = [100, 101, 103, 105, 106, 107, 108, 111, 112, 113]
 
