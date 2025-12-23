@@ -1,0 +1,39 @@
+{
+  "paper_id": "Xiong2016_ImprovedDAE",
+  "model_name": "improved_dae_reimplementation_end2end",
+  "window_radius": 50,
+  "window_len": 101,
+  "wavelet": "db6",
+  "level": 8,
+  "thresholding": "soft",
+  "threshold_formula": "Eq.(1) scale-adaptive: Tj = sigma_j*sqrt(2ln(n))/exp(j-1), sigma_j=median(|d_j|)/0.6745",
+  "training_records": [
+    100,
+    101,
+    103,
+    105,
+    106,
+    107,
+    108,
+    111,
+    112,
+    113
+  ],
+  "noise_record": "bw",
+  "snr_levels_train": [
+    0,
+    5,
+    10,
+    15
+  ],
+  "fs": 360,
+  "duration_sec": 10,
+  "start_sample": 0,
+  "optimizer": "Adam",
+  "lr": 0.001,
+  "epochs": 10,
+  "batch_size": 256,
+  "seed": 42,
+  "code_version": "v1",
+  "timestamp": "2025-12-23 14:52:28"
+}

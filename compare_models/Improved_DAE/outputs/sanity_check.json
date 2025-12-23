@@ -1,0 +1,18 @@
+{
+  "record": 100,
+  "target_snr_db": 15,
+  "input_snr_db": 15.00000000001873,
+  "wt_only": {
+    "snr_db": 14.557543112079225,
+    "rmse": 6.370467180165169
+  },
+  "wt_plus_dae": {
+    "snr_db": 3.716690551012526,
+    "rmse": 22.192892560892826
+  },
+  "improvement": {
+    "snr_db": -10.840852561066699,
+    "rmse": -15.822425380727658
+  },
+  "note": "SC4 quick check: expecting WT+DAE >= WT in SNR and/or <= in RMSE (not guaranteed on tiny training)."
+}
