@@ -41,8 +41,8 @@ class ImprovedDAE(nn.Module):
             nn.Sigmoid(),
             nn.Linear(hidden1, hidden2),
             nn.Sigmoid(),
-            nn.Linear(hidden2, self.window_len)
-            #nn.Sigmoid(),
+            nn.Linear(hidden2, self.window_len),
+            nn.Sigmoid(),  # Output is normalized to [0,1], so sigmoid is required
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -51,3 +51,19 @@ class ImprovedDAE(nn.Module):
         returns: (B, 101) in (0,1) (sigmoid)
         """
         return self.net(x)
+
+class SingleLayerAE(nn.Module):
+    """
+    Helper for layer-wise pretraining.
+    Input -> Hidden -> Output(=Input)
+    """
+    def __init__(self, input_dim: int, hidden_dim: int):
+        super().__init__()
+        self.encoder = nn.Linear(input_dim, hidden_dim)
+        self.decoder = nn.Linear(hidden_dim, input_dim)
+        self.act = nn.Sigmoid()
+
+    def forward(self, x):
+        h = self.act(self.encoder(x))
+        recon = self.act(self.decoder(h))
+        return recon, h

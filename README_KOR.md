@@ -58,14 +58,35 @@ $$ \text{PRD} = \sqrt{ \frac{\sum_{i=1}^{N} (x_{clean}[i] - \hat{x}_{clean}[i])^
 
 | 파일명 | 설명 |
 | :--- | :--- |
-| `baseline.py` | **핵심 알고리즘 (개발용)**. 원본 로직, 디버깅 헬퍼, 클래스 구조를 포함하며 알고리즘 연구 및 검증에 사용됩니다. |
-| `baseline_array.py` | **최적화된 실행 버전**. NumPy array 입력을 지원하도록 리팩토링되어 대량 처리 및 테스트 벤치 통합에 최적화되었습니다. |
-| `metrics.py` | **평가지표 모듈**. SNR, RMSE, PRD, MAD, Cosine Similarity 등의 수학적 수식을 구현합니다. |
-| `run_synthetic_test.py` | **메인 실험 스크립트**. MITDB+NSTDB 로드, 노이즈 주입, 알고리즘 실행 및 통계 보고서(CSV)와 파형 비교 그림을 생성합니다. |
+| `run_synthetic_test.py` | **메인 실험 스크립트**. 본 연구의 핵심 실행 파일입니다. [MITDB + 노이즈] 합성 파이프라인을 구동하고, 성능 평가지표 산출 및 결과 보고서 생성을 총괄합니다. |
+| `baseline_array.py` | **배열 기반 처리 엔진**. 실제 연구를 위해 NumPy 배열 입력을 지원하도록 리팩토링된 핵심 모듈입니다. 기존의 JSON 기반 입력을 탈피하여, 연구에 필수적인 동적 노이즈 합성 및 대량 데이터 처리가 가능하도록 최적화되었습니다. |
+| `baseline.py` | **디버깅 및 연구 모듈**. 초기 알고리즘 개발 및 과정별 로직 검증을 위해 사용되었습니다. JSON 기반의 입력을 기본값으로 지원하며, 상세한 디버깅 로그와 실험 코드를 포함하고 있습니다. |
+| `metrics.py` | **평가지표 라이브러리**. SNR, RMSE, PRD 등 신호 품질 평가를 위한 수학적 수식들이 구현되어 있습니다. |
+| `compare_models/` | **비교 모델 연구**. 딥러닝 기반 기선 제거 방법인 "Improved DAE" (Xiong et al., 2016)의 재현 코드를 포함합니다. |
 
 ---
 
-## 5. 실행 방법 및 결과 재현 (Usage)
+## 5. 딥러닝 모델 비교 분석 (Improved DAE)
+
+제안 알고리즘의 우수성을 검증하기 위해, 대표적인 딥러닝 기반 기선 제거 기법인 **Improved DAE** (Xiong et al., 2016)를 논문에 기술된 그대로 완벽하게 재현(Reproduction)하여 비교하였습니다.
+
+*   **비교 목적**: 전통적 신호처리 방식(제안 기법)과 딥러닝 방식(DAE) 간의 노이즈 제거 성능(SNR) 및 형태 보존력(RMSE) 비교.
+*   **구현 상세**:
+    *   **구조**: 101 $\to$ 50 $\to$ 50 $\to$ 101 (Fully Connected Autoencoder).
+    *   **파이프라인**: 웨이블릿 변환(db6, level 8) $\to$ 윈도우 분할 $\to$ DAE $\to$ 신호 복원.
+    *   **학습 전략**: 논문과 동일하게 탐욕적 계층별 사전 학습(Greedy Layer-wise Pretraining) 후 전체 미세 조정(Fine-tuning) 수행.
+*   **실행 방법**:
+    ```bash
+    # 1. DAE 모델 학습 (사전 학습 + 미세 조정)
+    python compare_models/Improved_DAE/train_DAE.py --epochs_pre 10 --epochs_fine 20
+
+    # 2. 비교 벤치마크 실행 (제안 기법 vs DAE vs 웨이블릿)
+    python compare_models/Improved_DAE/run_comparison.py --method all
+    ```
+
+---
+
+## 6. 실행 방법 및 결과 재현 (Usage)
 
 합성 테스트 벤치마크를 실행하려면 다음 커맨드를 사용하세요:
 
@@ -81,7 +102,7 @@ python run_synthetic_test.py
 
 ---
 
-## 6. 향후 연구 로드맵 (Future Work)
+## 7. 향후 연구 로드맵 (Future Work)
 
 *   **임상 데이터 검증**: 실제 ST-segment 변화가 포함된 주석 데이터셋(예: European ST-T Database)에서 성능 검증.
 *   **실시간 임베디드 구현**: `baseline_array.py`를 저전력 홀터 모니터 배포를 위해 C/C++ 환경에 최적화.

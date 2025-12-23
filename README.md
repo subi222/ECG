@@ -58,14 +58,35 @@ $$ \text{PRD} = \sqrt{ \frac{\sum_{i=1}^{N} (x_{clean}[i] - \hat{x}_{clean}[i])^
 
 | File | Description |
 | :--- | :--- |
-| `baseline.py` | **Core Algorithm (Dev)**. Contains the original logic, debugging helpers, and class structures. Used for algorithm research. |
-| `baseline_array.py` | **Optimized Implementation**. Refactored version supporting `numpy` array inputs for batch processing and integration into the synthetic test bench. |
-| `metrics.py` | **Metric Library**. Mathematical implementations of SNR, RMSE, PRD, MAD, and Cosine Similarity. |
-| `run_synthetic_test.py` | **Main Experiment Script**. Loads MITDB+NSTDB, performs noise injection, runs the algorithm, and generates statistical reports (CSV) and qualitative plots. |
+| `run_synthetic_test.py` | **Main Experiment Script**. The primary entry point for benchmarking. It orchestrates the [MITDB + Noise] mixing pipeline, invokes the processing engine, and generates statistical reports. |
+| `baseline_array.py` | **Main Processing Engine (Array-based)**. Refactored to support direct NumPy array inputs. This transition from legacy JSON-based processing was necessary to support the dynamic noise-mixing required for this research. |
+| `baseline.py` | **Research & Debugging Module**. Used for initial algorithm development and step-by-step logic verification. It contains legacy support for JSON inputs and extensive debugging helpers. |
+| `metrics.py` | **Metric Library**. Mathematical implementations of signal quality indicators: SNR, RMSE, PRD, and Cosine Similarity. |
+| `compare_models/` | **Comparison Benchmarks**. Contains reproduction code for deep learning models, specifically the "Improved DAE" (Xiong et al., 2016). |
 
 ---
 
-## 5. Usage & Reproducibility
+## 5. Comparative Analysis (Improved DAE)
+
+This project includes a high-fidelity reproduction of **Improved DAE** (Xiong et al., 2016), a deep learning-based baseline removal method, to demonstrate the effectiveness of our proposed algorithm.
+
+*   **Objective**: Compare noise suppression (SNR) and morphology preservation (RMSE) between our signal processing approach and a standard Denoising Autoencoder.
+*   **Implementation Details**:
+    *   **Structure**: 101 $\to$ 50 $\to$ 50 $\to$ 101 (Fully Connected).
+    *   **Pipeline**: Wavelet Transform (db6, level 8) $\to$ Windowing $\to$ DAE $\to$ Reconstruction.
+    *   **Training**: Greedy Layer-wise Pretraining + Fine-tuning (Reproduced as per paper).
+*   **Execution**:
+    ```bash
+    # 1. Train the DAE (Pretraining + Fine-tuning)
+    python compare_models/Improved_DAE/train_DAE.py --epochs_pre 10 --epochs_fine 20
+
+    # 2. Run Comparison Benchmark
+    python compare_models/Improved_DAE/run_comparison.py --method all
+    ```
+
+---
+
+## 6. Usage & Reproducibility
 
 To reproduce the synthetic evaluation results:
 
@@ -81,7 +102,7 @@ python run_synthetic_test.py
 
 ---
 
-## 6. Future Work / Research Roadmap
+## 7. Future Work / Research Roadmap
 
 *   **Clinical Validation**: Validate algorithm performance on manually annotated ST-elevation datasets (e.g., European ST-T Database).
 *   **Real-time Embedded Porting**: Optimize `baseline_array.py` for C/C++ deployment on low-power Holter monitors.
