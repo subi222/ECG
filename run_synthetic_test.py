@@ -24,7 +24,6 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 MITDB_DIR = Path("/home/subi/PycharmProjects/ECG/MITDB_data")
 NSTDB_DIR = Path("/home/subi/PycharmProjects/ECG/noise_data")
 
-
 record_ids = [100, 101, 103, 105, 106, 107, 108, 111, 112, 113]
 
 START_SAMPLE = 0       # 모두 동일 조건
@@ -42,22 +41,23 @@ SNR_LEVELS = [0, 5, 10, 15]
 def remove_dc(x):
     return x - np.mean(x)
 
-
-def calculate_snr_db(clean, est, remove_mean_clean=True):
+def calculate_snr_db(clean, est, remove_mean=True):
     """
-    General SNR definition
-    signal = clean
-    noise  = est - clean
+    signal = clean (DC 제거 후)
+    noise  = est - clean (둘 다 DC 제거 후)
     """
     clean = np.asarray(clean, dtype=np.float64)
-    est = np.asarray(est, dtype=np.float64)
+    est   = np.asarray(est, dtype=np.float64)
 
-    if remove_mean_clean:
-        s = clean - clean.mean()
+    if remove_mean:
+        clean0 = clean - clean.mean()
+        est0   = est - est.mean()
     else:
-        s = clean
+        clean0 = clean
+        est0   = est
 
-    e = est - clean  # noise (오차)
+    s = clean0
+    e = est0 - clean0
 
     ps = np.mean(s ** 2)
     pe = np.mean(e ** 2)
@@ -104,37 +104,52 @@ def load_nstdb_bw(record, start_sample, duration_sec, fs):
     end = start_sample + int(fs * duration_sec)
     return bw[start_sample:end], fs
 
-
 def add_baseline_wander_snr(clean_ecg, bw, target_snr_db):
     """
-    clean + scaled baseline wander (target input SNR)
+    reference(raw) + scaled baseline wander (target input SNR)
+    - reference는 MITDB raw 그대로 유지
+    - baseline 스케일 계산(파워 추정)과 지표 계산에서만 DC/mean 제거 사용
     """
     N = min(len(clean_ecg), len(bw))
-    clean = remove_dc(clean_ecg[:N])
-    bw = remove_dc(bw[:N])
 
-    ps = np.mean(clean ** 2)
-    pn = np.mean(bw ** 2)
+    # ✅ reference = MITDB raw (DC 제거하지 않음)
+    ref = np.asarray(clean_ecg[:N], dtype=np.float64)
+
+    # ✅ added baseline wander: DC 제거한 bw를 사용(순수한 wander만)
+    bw0 = remove_dc(np.asarray(bw[:N], dtype=np.float64))
+
+    # 스케일 계산은 평균 제거한 ref0로 안정화 (여긴 "노이즈 강도 설정"을 위한 내부 계산)
+    ref0 = remove_dc(ref)
+
+    ps = np.mean(ref0 ** 2)
+    pn = np.mean(bw0 ** 2)
 
     target_noise_power = ps / (10 ** (target_snr_db / 10))
     scale = np.sqrt(target_noise_power / (pn + 1e-12))
 
-    noisy = clean + bw * scale
+    # ✅ input = raw ref + added baseline
+    noisy = ref + bw0 * scale
 
-    actual_snr = calculate_snr_db(clean, noisy)
-    return noisy, clean, actual_snr
+    # 입력 SNR(=지표)은 계산 단계이므로 mean 제거 옵션 사용 OK
+    actual_snr = calculate_snr_db(ref, noisy, remove_mean=True)
+
+    # ✅ return: (input, reference, input_snr)
+    return noisy, ref, actual_snr
 
 
 def plot_triplet(clean, noisy, processed, title, fs):
     t = np.arange(len(clean)) / fs
     fig, ax = plt.subplots(3, 1, figsize=(14, 9), sharex=True)
 
-    ax[0].plot(t, clean)
-    ax[0].set_title("True Clean ECG (HPF 0.5 Hz)")
+    clean_viz = remove_dc(clean)
+    noisy_viz = remove_dc(noisy)
+
+    ax[0].plot(t, clean_viz)
+    ax[0].set_title("Reference ECG (MITDB raw, DC removed)")
     ax[0].grid(True, alpha=0.3)
 
-    ax[1].plot(t, noisy)
-    ax[1].set_title("Noisy ECG (Baseline Wander)")
+    ax[1].plot(t, noisy_viz)
+    ax[1].set_title("Noisy ECG (Baseline Wander, DC removed)")
     ax[1].grid(True, alpha=0.3)
 
     ax[2].plot(t[:len(processed)], processed)
@@ -205,7 +220,7 @@ def run_synthetic_test():
             noisy = noisy[:N]
             processed = processed[:N]
 
-            snr_out = calculate_snr_db(clean_ref, processed)
+            snr_out = calculate_snr_db(clean_ref, processed, remove_mean=True)
             snr_imp = snr_out - snr_in
             rmse = calculate_rmse(clean_ref, processed)
 
