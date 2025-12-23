@@ -7,12 +7,12 @@
     "rmse": 6.370467180165169
   },
   "wt_plus_dae": {
-    "snr_db": 3.716690551012526,
-    "rmse": 22.192892560892826
+    "snr_db": 3.6362276021749294,
+    "rmse": 22.399434702109065
   },
   "improvement": {
-    "snr_db": -10.840852561066699,
-    "rmse": -15.822425380727658
+    "snr_db": -10.921315509904296,
+    "rmse": -16.028967521943898
   },
   "note": "SC4 quick check: expecting WT+DAE >= WT in SNR and/or <= in RMSE (not guaranteed on tiny training)."
 }

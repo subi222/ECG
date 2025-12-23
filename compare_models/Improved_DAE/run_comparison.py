@@ -10,6 +10,12 @@ Methods:
 - improved_dae: paper-like pipeline:
     noisy -> WT(db6, level=8, soft threshold Eq.1) -> windowing(δ=50) -> DAE inference -> overlap mean fusion
 
+Control methods (for engine sanity checks):
+- identity: processed = noisy
+- oracle  : processed = noisy - injected_baseline_scaled
+            (Requires the injected baseline component; we generate it during mixing.)
+- wt_only : processed = WT(db6, level=8, soft threshold Eq.1) only (no DAE)
+
 Outputs (same spirit as run_synthetic_test.py):
 - outputs/ per-case plot saved
 - outputs/synthetic_test_results.csv : raw + summary(mean±std)
@@ -31,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Callable, Dict, Tuple
 
@@ -60,8 +67,8 @@ DEFAULT_FS = 360
 DEFAULT_NSTDB_RECORD = "bw"
 DEFAULT_SNR_LEVELS = [0, 5, 10, 15]
 
-DEFAULT_MITDB_DIR = Path("/MITDB_data")
-DEFAULT_NSTDB_DIR = Path("/noise_data")
+DEFAULT_MITDB_DIR = Path("/home/subi/PycharmProjects/ECG/MITDB_data")
+DEFAULT_NSTDB_DIR = Path("/home/subi/PycharmProjects/ECG/noise_data")
 
 OUTPUT_DIR = Path("./outputs")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -96,7 +103,6 @@ def calculate_rmse(clean, processed):
     return float(np.sqrt(np.mean((clean0 - proc0) ** 2)))
 
 def load_mitdb_csv(mitdb_dir: Path, record, start_sample, duration_sec, fs):
-    import pandas as pd
     csv_path = mitdb_dir / f"{record}.csv"
     df = pd.read_csv(csv_path)
     df.columns = [c.strip().strip("'").strip('"') for c in df.columns]
@@ -117,6 +123,9 @@ def load_nstdb_noise(nstdb_dir: Path, record: str, start_sample, duration_sec, f
     return noise[start_sample:end].astype(np.float64), fs
 
 def add_baseline_wander_snr(clean_ecg, bw, target_snr_db):
+    """
+    Original mixer (kept for reference).
+    """
     N = min(len(clean_ecg), len(bw))
     ref = np.asarray(clean_ecg[:N], dtype=np.float64)
     bw0 = remove_dc(np.asarray(bw[:N], dtype=np.float64))
@@ -128,6 +137,27 @@ def add_baseline_wander_snr(clean_ecg, bw, target_snr_db):
     noisy = ref + bw0 * scale
     actual_snr = calculate_snr_db(ref, noisy, remove_mean=True)
     return noisy, ref, float(actual_snr)
+
+def add_baseline_wander_snr_with_components(clean_ecg, bw, target_snr_db):
+    """
+    Same logic as add_baseline_wander_snr, but also returns the injected baseline component
+    (bw_scaled) for oracle validation.
+    """
+    N = min(len(clean_ecg), len(bw))
+    ref = np.asarray(clean_ecg[:N], dtype=np.float64)
+    bw0 = remove_dc(np.asarray(bw[:N], dtype=np.float64))
+    ref0 = remove_dc(ref)
+
+    ps = np.mean(ref0 ** 2)
+    pn = np.mean(bw0 ** 2)
+
+    target_noise_power = ps / (10 ** (target_snr_db / 10))
+    scale = np.sqrt(target_noise_power / (pn + 1e-12))
+
+    bw_scaled = bw0 * scale
+    noisy = ref + bw_scaled
+    actual_snr = calculate_snr_db(ref, noisy, remove_mean=True)
+    return noisy, ref, float(actual_snr), bw_scaled
 
 def plot_triplet(clean, noisy, processed, title, fs):
     t = np.arange(len(clean)) / fs
@@ -152,14 +182,17 @@ def plot_triplet(clean, noisy, processed, title, fs):
 
 
 # ===========================
-# Wavelet + windowing + fusion (same as train script)
+# Wavelet + windowing + fusion
 # ===========================
-import math
-
 def _soft_threshold(d: np.ndarray, T: float) -> np.ndarray:
     return np.sign(d) * np.maximum(np.abs(d) - T, 0.0)
 
 def wavelet_denoise_db6_level8_soft(x: np.ndarray, level: int = 8) -> np.ndarray:
+    """
+    db6, up to level=8, soft threshold.
+    Threshold uses a scale-adaptive form inspired by paper Eq.(1) as previously implemented:
+      sigma_j via MAD, then T_j ~ sigma_j*sqrt(2 log N)/exp(j-1)
+    """
     x = np.asarray(x, dtype=np.float64)
     n = x.size
     wavelet = "db6"
@@ -168,12 +201,14 @@ def wavelet_denoise_db6_level8_soft(x: np.ndarray, level: int = 8) -> np.ndarray
     coeffs = pywt.wavedec(x, wavelet, level=use_level)
     cA = coeffs[0]
     cDs = coeffs[1:]
+
     new_cDs = []
     for idx, d in enumerate(cDs, start=1):
-        j = use_level - idx + 1
+        j = use_level - idx + 1  # scale index
         sigma_j = np.median(np.abs(d)) / 0.6745 if d.size > 0 else 0.0
         Tj = sigma_j * math.sqrt(2.0 * math.log(n + 1e-12)) / math.exp(max(j - 1, 0))
         new_cDs.append(_soft_threshold(d, Tj))
+
     new_coeffs = [cA] + new_cDs
     y = pywt.waverec(new_coeffs, wavelet)
     return y[:n]
@@ -208,24 +243,50 @@ def run_our_algorithm(noisy: np.ndarray, fs: float, **kwargs) -> np.ndarray:
     y = process_ecg_array(ecg_raw=noisy, fs_raw=fs, fs_target=None, return_time=False)
     return np.asarray(y, dtype=np.float64)
 
+def run_identity(noisy: np.ndarray, fs: float, **kwargs) -> np.ndarray:
+    return np.asarray(noisy, dtype=np.float64)
+
+def run_oracle(noisy: np.ndarray, fs: float, injected_bw_scaled: np.ndarray, **kwargs) -> np.ndarray:
+    # Perfect subtraction of the injected baseline component
+    return np.asarray(noisy, dtype=np.float64) - np.asarray(injected_bw_scaled, dtype=np.float64)
+
+def run_wt_only(noisy: np.ndarray, fs: float, **kwargs) -> np.ndarray:
+    y = wavelet_denoise_db6_level8_soft(np.asarray(noisy, dtype=np.float64), level=8)
+    return y[: len(noisy)]
+
 @torch.no_grad()
 def run_improved_dae(noisy: np.ndarray, fs: float, model: ImprovedDAE, device: torch.device,
                      radius: int = 50, **kwargs) -> np.ndarray:
     noisy = np.asarray(noisy, dtype=np.float64)
     # pipeline: WT -> windows -> DAE -> overlap mean
     a = wavelet_denoise_db6_level8_soft(noisy, level=8)[:noisy.size]
+
+    # ===== DEBUG: WT → window → overlap identity check =====
+    win_dbg, centers_dbg = extract_windows(a, radius=radius)
+    a_rec_dbg = overlap_mean_fusion(win_dbg, centers_dbg, N=len(a), radius=radius)
+
+    print("[DBG] WT vs WT(win+overlap) maxabs:",
+          np.max(np.abs(a - a_rec_dbg)))
+    # ======================================================
     win, centers = extract_windows(a, radius=radius)  # (N,101)
 
     w_min = win.min(axis=1, keepdims=True)
     w_max = win.max(axis=1, keepdims=True)
     denom = (w_max - w_min) + 1e-8
+
     x_norm = (win - w_min) / denom
     x_norm = np.clip(x_norm, 0.0, 1.0)
 
     x_t = torch.from_numpy(x_norm).float().to(device)
     y_norm = model(x_t).cpu().numpy()
 
+    # ⭐ 추가: inference clamp (0~1)
+    y_norm = np.clip(y_norm, 0.0, 1.0)
+
+
+    #denorm back
     y_win = y_norm * denom + w_min
+
     y_sig = overlap_mean_fusion(y_win, centers, N=noisy.size, radius=radius)
     return y_sig
 
@@ -241,7 +302,6 @@ def load_dae(model_path: Path, config_path: Path, device: torch.device) -> Tuple
 
 
 def check_config(cfg: dict, fs: int, radius: int):
-    # validate key fields, warn on mismatch
     def warn(msg):
         print(f"[CONFIG WARNING] {msg}")
 
@@ -271,7 +331,16 @@ def main():
     parser.add_argument("--duration_sec", type=int, default=int(getattr(rst, "DURATION_SEC", DEFAULT_DURATION_SEC)))
     parser.add_argument("--fs", type=int, default=int(getattr(rst, "FS", DEFAULT_FS)))
 
-    parser.add_argument("--method", type=str, default="improved_dae", choices=["our_algorithm", "improved_dae"])
+
+    parser.add_argument(
+        "--method",
+        dest="method",  # ⭐ 어떤 실수를 해도 args.method로 고정
+        type=str,
+        default="improved_dae",
+        choices=["our_algorithm", "improved_dae", "identity", "oracle", "wt_only"],
+    )
+
+
     parser.add_argument("--dae_model", type=str, default=str(OUTPUT_DIR / "dae_model.pth"))
     parser.add_argument("--dae_config", type=str, default=str(OUTPUT_DIR / "dae_config.json"))
     parser.add_argument("--radius", type=int, default=50)
@@ -279,20 +348,30 @@ def main():
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
+    # ✅ debug print는 args 만든 다음에만
+    print("ARGS KEYS =", list(vars(args).keys()))
+    print("args.method =", getattr(args, "method", "NO_METHOD"))
+
     mitdb_dir = Path(args.mitdb_dir)
     nstdb_dir = Path(args.nstdb_dir)
     device = torch.device(args.device)
 
-    # method registry
+    # load model only when needed
     model = None
     cfg = None
     if args.method == "improved_dae":
         model, cfg = load_dae(Path(args.dae_model), Path(args.dae_config), device)
         check_config(cfg, fs=args.fs, radius=args.radius)
 
+    # method registry
     methods: Dict[str, Callable] = {
         "our_algorithm": lambda noisy, fs, **kw: run_our_algorithm(noisy, fs, **kw),
         "improved_dae": lambda noisy, fs, **kw: run_improved_dae(noisy, fs, model=model, device=device, radius=args.radius, **kw),
+
+        # controls
+        "identity": lambda noisy, fs, **kw: run_identity(noisy, fs, **kw),
+        "oracle":  lambda noisy, fs, **kw: run_oracle(noisy, fs, **kw),
+        "wt_only": lambda noisy, fs, **kw: run_wt_only(noisy, fs, **kw),
     }
 
     results = []
@@ -307,8 +386,13 @@ def main():
             case_name = f"{args.method}_Case{rec}_SNR{snr_t}dB"
             print(f"\n[{case_name}]")
 
-            noisy, ref, snr_in = add_baseline_wander_snr(clean, noise, snr_t)
-            processed = methods[args.method](noisy, fs)
+            # ✅ oracle을 위해 bw_scaled까지 함께 생성
+            noisy, ref, snr_in, bw_scaled = add_baseline_wander_snr_with_components(clean, noise, snr_t)
+
+            if args.method == "oracle":
+                processed = methods[args.method](noisy, fs, injected_bw_scaled=bw_scaled)
+            else:
+                processed = methods[args.method](noisy, fs)
 
             N = min(len(ref), len(processed))
             ref = ref[:N]

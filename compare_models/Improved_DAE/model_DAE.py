@@ -41,8 +41,8 @@ class ImprovedDAE(nn.Module):
             nn.Sigmoid(),
             nn.Linear(hidden1, hidden2),
             nn.Sigmoid(),
-            nn.Linear(hidden2, self.window_len),
-            nn.Sigmoid(),
+            nn.Linear(hidden2, self.window_len)
+            #nn.Sigmoid(),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

@@ -266,17 +266,28 @@ class WindowDataset(torch.utils.data.Dataset):
         self.a_win, self.centers = extract_windows(a_sig, radius=self.radius)
         self.c_win, _ = extract_windows(clean_sig, radius=self.radius)
 
-        # per-window min/max from input windows
+        # window 중심값 + scale
         self.w_min = self.a_win.min(axis=1, keepdims=True)
         self.w_max = self.a_win.max(axis=1, keepdims=True)
-
         denom = (self.w_max - self.w_min) + self.eps
+
+        # 입력/타깃 모두 "입력 창의 min/max"로 정규화 (중요!)
         self.x = (self.a_win - self.w_min) / denom
         self.t = (self.c_win - self.w_min) / denom
 
-        # clip targets into [0,1] for BCE stability (out-of-range due to mismatch min/max)
+        # BCE 안정성: [0,1]로 clip
         self.x = np.clip(self.x, 0.0, 1.0)
         self.t = np.clip(self.t, 0.0, 1.0)
+
+        print("[DBG] x_norm range:", self.x.min(), self.x.max())
+        print("[DBG] t_norm range:", self.t.min(), self.t.max(),
+              "clip_rate=", np.mean((self.t < 0) | (self.t > 1)))
+        if not hasattr(self, "_dbg_printed"):
+            print("[DBG] x_norm range:", self.x.min(), self.x.max())
+            print("[DBG] t_norm range:", self.t.min(), self.t.max(),
+                  "clip_rate=", np.mean((self.t < 0) | (self.t > 1)))
+            self._dbg_printed = True
+
 
     def __len__(self) -> int:
         return self.x.shape[0]
@@ -335,7 +346,10 @@ def train_one_epoch(model: nn.Module, loader, opt, loss_fn, device: torch.device
         x = x.to(device)
         t = t.to(device)
         opt.zero_grad(set_to_none=True)
+
         y = model(x)
+        y = torch.clamp(y, 0.0, 1.0)  # ⭐ 추가 (학습용 clamp)
+
         loss = loss_fn(y, t)
         loss.backward()
         opt.step()
@@ -457,7 +471,8 @@ def main():
 
     # Model
     model = ImprovedDAE(window_len=cfg.window_len).to(device)
-    loss_fn = nn.BCELoss()
+    #loss_fn = nn.BCELoss()
+    loss_fn = nn.MSELoss()
     opt = optim.Adam(model.parameters(), lr=args.lr)
 
     # (SC2) I/O sanity
