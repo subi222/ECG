@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 """
 Minimal, memory-efficient ECG processor — JSON → processed ECG (no UI)
 
