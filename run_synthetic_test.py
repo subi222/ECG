@@ -19,10 +19,9 @@ from baseline_array import process_ecg_array
 # 설정
 # ===========================
 OUTPUT_DIR = Path("./synthetic_results")
-OUTPUT_DIR.mkdir(exist_ok=True)
 
-MITDB_DIR = Path("/home/subi/PycharmProjects/ECG/MITDB_data")
-NSTDB_DIR = Path("/home/subi/PycharmProjects/ECG/noise_data")
+MITDB_DIR = Path("./MITDB_data")
+NSTDB_DIR = Path("./noise_data")
 
 record_ids = [100, 101, 103, 105, 106, 107, 108, 111, 112, 113]
 
@@ -166,6 +165,7 @@ def plot_triplet(clean, noisy, processed, title, fs):
 # Main
 # ===========================
 def run_synthetic_test():
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     results = []
 
     case_idx = 0
