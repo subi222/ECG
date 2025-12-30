@@ -50,8 +50,8 @@ OUTPUT_DIR_DEFAULT = Path("outputs/dae")
 # Defaults
 # ===========================
 START_SAMPLE_DEFAULT = 0
-DURATION_SEC_DEFAULT = 10
-FS_DEFAULT = 360
+DURATION_SEC_DEFAULT = 30
+FS_DEFAULT = 250
 NSTDB_RECORD_DEFAULT = "bw"
 SNR_LEVELS_DEFAULT = [0, 5, 10, 15]
 
@@ -83,6 +83,15 @@ def list_mitdb_records(mitdb_dir: Path) -> List[int]:
         if m:
             recs.append(int(m.group(1)))
     return sorted(set(recs))
+
+def resample_linear(x: np.ndarray, fs_in: int, fs_out: int) -> np.ndarray:
+    if fs_in == fs_out:
+        return x
+    n_out = int(round(len(x) * fs_out / fs_in))
+    t_in = np.linspace(0, 1, len(x), endpoint=False)
+    t_out = np.linspace(0, 1, n_out, endpoint=False)
+    return np.interp(t_out, t_in, x).astype(np.float64)
+
 
 def remove_dc(x: np.ndarray) -> np.ndarray:
     return x - np.mean(x)
@@ -337,6 +346,9 @@ def main():
 
         for snr in snrs:
             noisy, ref, _ = add_baseline_wander_snr(clean, noise, snr)
+            # ★ 추가: 250Hz로 통일
+            noisy = resample_linear(noisy, fs_mit, 250)
+            ref = resample_linear(ref, fs_mit, 250)
 
             # WT Logic
             wt_denoised = wavelet_denoise_db6_level8_soft(noisy, level=cfg.level)
