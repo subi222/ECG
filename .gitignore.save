@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+X^# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -152,6 +152,3 @@ cython_debug/
 # Project specific exclusions
 # (Data folders MITDB_data, noise_data, synthetic_results are INTENTIONALLY NOT IGNORED)
 # (They should be included in Git as per your request)
-
-# ignore model weights
-compare_models/methods/UNet_1D/outputs/unet_model.pth

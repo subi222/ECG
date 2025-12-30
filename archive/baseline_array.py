@@ -384,7 +384,7 @@ def roi_adaptive_mix(y_qvri_out, y_med_out, wins, fs, gamma=0.5, corr_min=0.15):
 # Baseline core (Hybrid BL++)
 # -----------------------------
 #@profiled()
-# baseline.py 내부의 기존 baseline_asls_masked 함수를 이걸로 덮어쓰세요.
+# baseline_debugging.py 내부의 기존 baseline_asls_masked 함수를 이걸로 덮어쓰세요.
 
 def baseline_asls_masked(y, lam=1e6, p=0.008, niter=10, mask=None,
                          decim_for_baseline=1, use_float32=False, ws: Optional[ECGWorkspace] = None):
@@ -715,7 +715,7 @@ import numpy as np
 from scipy import signal
 
 # ... (위에는 baseline.py에 이미 있는 내용 그대로 두고)
-# baseline.py 파일의 process_ecg_array 함수 전체를 이걸로 교체하세요.
+# baseline_debugging.py 파일의 process_ecg_array 함수 전체를 이걸로 교체하세요.
 
 def process_ecg_array(
     ecg_raw,
