@@ -2,23 +2,35 @@
 """
 model_DAE.py
 
-Improved DAE reimplementation (Xiong et al., 2016)
+Improved DAE reimplementation baseline (Xiong et al., 2016)
 - Paper: "ECG signal enhancement based on improved denoising auto-encoder"
-- DAE structure: 101-50-50-101 (δ=50 → window_len=101)
-- Activations: sigmoid for hidden and output
-- Loss: Bernoulli distance (cross-entropy) → BCELoss in PyTorch
+- Core network: Fully-connected 101-50-50-101 (δ=50 → window_len=101)
+- Activations: Sigmoid for hidden and output (outputs in (0,1))
+- Objective: Bernoulli distance (cross-entropy) → BCELoss in PyTorch
 
-IMPORTANT (explicit approximation / ablation):
-- The paper describes layer-wise pretraining + global fine-tuning ("trained layer by layer... fine-tuning all weights").
-  For fair baseline comparison and simplicity, this implementation trains end-to-end from scratch
-  (i.e., it omits layer-wise pretraining). This choice should be documented in any report.
+How this repo trains it (see train_DAE.py):
+- Input formation: noisy ECG (MITDB raw + NSTDB bw scaled to target SNR)
+- Preprocessing: Wavelet denoise (db6, level=8, soft-threshold) before windowing
+- Windowing: radius=50 → length 101
+- Training scheme:
+  (1) Greedy layer-wise pretraining using SingleLayerAE
+      - AE1: 101-50-101 (reconstruct input windows)
+      - AE2: 50-50-50  (reconstruct hidden features)
+  (2) End-to-end fine-tuning of ImprovedDAE (101-50-50-101) on denoising objective
 
-Normalization assumption (documented):
-- The paper maps each sample vector v to x∈[0,1]^p by min-max normalization.
-- Here we standardize that mapping as "per-window min-max" during dataset creation / inference:
-  x_norm = (x - min_w) / (max_w - min_w + eps)
-  This makes inference possible without access to clean targets.
+Important notes / approximations:
+- Weight tying (W' = W^T) is mentioned in some AE literature; this implementation does NOT enforce tied weights.
+- Normalization follows the paper’s x∈[0,1]^p mapping:
+  We use per-window min-max normalization for the input, and apply the SAME min/max to the target window
+  (to keep paired training stable under BCELoss).
+- Sampling rate: experiments may resample signals to 250 Hz for consistency with the comparison pipeline.
+  (Model itself is agnostic; it only sees 101-length windows.)
+
+Usage:
+- Use ImprovedDAE for the final 101-50-50-101 denoising network.
+- Use SingleLayerAE only as a helper module for layer-wise pretraining.
 """
+
 
 from __future__ import annotations
 import torch
@@ -31,7 +43,7 @@ class ImprovedDAE(nn.Module):
         super().__init__()
         if window_len != 101:
             # Paper explicitly uses δ=50 ⇒ 2δ+1 = 101 and architecture 101-50-50-101.
-            # Allow override for ablation, but warn via code comments / config.
+            # Paper uses δ=50 ⇒ 2δ+1=101. Override only for ablation; keep default=101 for reproduction.
             pass
 
         self.window_len = int(window_len)
