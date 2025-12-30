@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
-import pandas as pd
 import sys
 import os
 from pathlib import Path
@@ -16,7 +15,7 @@ sys.path.append(str(PROJECT_ROOT))
 # ★ [핵심 수정] 외부 파일 불러오기 및 경로 강제 수정 ★
 try:
     # 1. 모듈 자체를 먼저 불러옵니다.
-    import run_synthetic_test
+    from v1_ours import run_synthetic_test
 
     # 2. 모듈 안에 있는 경로 변수들을 '절대 경로'로 강제로 바꿔치기합니다. (Monkey Patching)
     # 이렇게 하면 실행 위치가 어디든 상관없이 무조건 루트 폴더를 찾아갑니다.
@@ -24,7 +23,7 @@ try:
     run_synthetic_test.NSTDB_DIR = PROJECT_ROOT / "noise_data"
 
     # 3. 이제 함수들을 안전하게 가져옵니다.
-    from run_synthetic_test import add_baseline_wander_snr, load_mitdb_csv, load_nstdb_bw
+    from v1_ours.run_synthetic_test import add_baseline_wander_snr, load_mitdb_csv, load_nstdb_bw
 
     print(" 외부 함수(Mixer) 및 경로 설정 완료!")
 

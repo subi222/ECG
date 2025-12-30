@@ -1,9 +1,7 @@
 import csv
 import numpy as np
 import wfdb
-from scipy.signal import butter, filtfilt
-import os
-from baseline_debugging import process_ecg_from_array
+from v1_ours.baseline_debugging import process_ecg_from_array
 
 
 # =========================================

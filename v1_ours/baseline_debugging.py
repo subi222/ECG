@@ -1109,7 +1109,7 @@ if __name__ == "__main__":
     record_ids = records_100 + records_200
 
     # 2) MITDB CSV 경로
-    base_dir = "MITDB_data"
+    base_dir = "../MITDB_data"
 
     # 3) 문제 레코드 (R-peak 이상하게 나온 n개)
     problem_records = [ ]

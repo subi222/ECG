@@ -29,8 +29,8 @@ sys.path.append(str(PROJECT_ROOT))
 
 # Now we can import project modules
 try:
-    from baseline_array import process_ecg_array
-    from metrics import SNR, RMSE
+    from v1_ours.baseline_array import process_ecg_array
+    from v1_ours.metrics import SNR, RMSE
 except ImportError as e:
     print(f"Error importing modules from project root: {e}")
     sys.exit(1)

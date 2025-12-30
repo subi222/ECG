@@ -13,15 +13,15 @@ import matplotlib.pyplot as plt
 import wfdb
 
 from pathlib import Path
-from baseline_array import process_ecg_array
+from v1_ours.baseline_array import process_ecg_array
 
 # ===========================
 # 설정
 # ===========================
-OUTPUT_DIR = Path("./synthetic_results")
+OUTPUT_DIR = Path("../synthetic_results")
 
-MITDB_DIR = Path("./MITDB_data")
-NSTDB_DIR = Path("./noise_data")
+MITDB_DIR = Path("../MITDB_data")
+NSTDB_DIR = Path("../noise_data")
 
 record_ids = [100, 101, 103, 105, 106, 107, 108, 111, 112, 113]
 
