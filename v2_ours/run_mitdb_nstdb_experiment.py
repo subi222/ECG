@@ -173,20 +173,16 @@ def ensure_dirs():
 # -------------------------
 DETAIL_HEADER = [
     "rec_id", "noise_rec", "snr_target_db",
-    "fs_target",
     "snr_in_db", "snr_out_db", "snr_improve_db",
-    "rmse", "nrmse_std", "prd_percent",
-    "n_samples_eval"
+    "nrmse_std", "prd_percent"
 ]
 
 SUMMARY_HEADER = [
-    "noise_rec", "snr_target_db",
-    "count",
+    "noise_rec", "snr_target_db", "count",
     "snr_in_mean", "snr_in_std",
     "snr_out_mean", "snr_out_std",
     "snr_improve_mean", "snr_improve_std",
-    "rmse_mean", "rmse_std",
-    "nrmse_std_mean", "nrmse_std_std",
+    "nrmse_mean", "nrmse_std",
     "prd_mean", "prd_std"
 ]
 
@@ -358,10 +354,8 @@ def main():
 
             detail_rows.append([
                 rec, NOISE_REC, snr_tgt,
-                FS_TARGET,
                 float(snr_in), float(snr_out), imp,
-                rmse, nrmse, prd,
-                N
+                nrmse, prd
             ])
 
             print(
@@ -381,7 +375,6 @@ def main():
         idx_snr_in = DETAIL_HEADER.index("snr_in_db")
         idx_snr_out = DETAIL_HEADER.index("snr_out_db")
         idx_imp = DETAIL_HEADER.index("snr_improve_db")
-        idx_rmse = DETAIL_HEADER.index("rmse")
         idx_nrmse = DETAIL_HEADER.index("nrmse_std")
         idx_prd = DETAIL_HEADER.index("prd_percent")
 
@@ -398,7 +391,6 @@ def main():
             snr_in_mean, snr_in_std = _mean_std([r[idx_snr_in] for r in rows_g])
             snr_out_mean, snr_out_std = _mean_std([r[idx_snr_out] for r in rows_g])
             imp_mean, imp_std = _mean_std([r[idx_imp] for r in rows_g])
-            rmse_mean, rmse_std = _mean_std([r[idx_rmse] for r in rows_g])
             nrmse_mean, nrmse_std = _mean_std([r[idx_nrmse] for r in rows_g])
             prd_mean, prd_std = _mean_std([r[idx_prd] for r in rows_g])
 
@@ -408,7 +400,6 @@ def main():
                 snr_in_mean, snr_in_std,
                 snr_out_mean, snr_out_std,
                 imp_mean, imp_std,
-                rmse_mean, rmse_std,
                 nrmse_mean, nrmse_std,
                 prd_mean, prd_std
             ])

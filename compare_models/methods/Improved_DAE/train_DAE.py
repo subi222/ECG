@@ -33,21 +33,22 @@ import torch.optim as optim
 
 import wfdb
 import pywt
+import re
+from pathlib import Path
+from typing import List
 
 from model_DAE import ImprovedDAE, SingleLayerAE
 
 # ===========================
 # Project Paths (Relative)
 # ===========================
-PROJECT_ROOT = Path(__file__).resolve().parents[2]  # .../Antigravity/ECG
-MITDB_DIR_DEFAULT = PROJECT_ROOT / "MITDB_data"
-NSTDB_DIR_DEFAULT = PROJECT_ROOT / "noise_data"
-OUTPUT_DIR_DEFAULT = Path("outputs")
+MITDB_DIR_DEFAULT = Path("/home/subi/PycharmProjects/ECG/MITDB_data")
+NSTDB_DIR_DEFAULT = Path("/home/subi/PycharmProjects/ECG/noise_data")
+OUTPUT_DIR_DEFAULT = Path("outputs/dae")
 
 # ===========================
 # Defaults
 # ===========================
-record_ids_default = [100, 101, 103, 105, 106, 107, 108, 111, 112, 113]
 START_SAMPLE_DEFAULT = 0
 DURATION_SEC_DEFAULT = 10
 FS_DEFAULT = 360
@@ -71,6 +72,18 @@ def set_seed(seed: int = 42) -> None:
 # ===========================
 # Helpers
 # ===========================
+def list_mitdb_records(mitdb_dir: Path) -> List[int]:
+    """
+    MITDB 폴더에서 *.hea 파일을 스캔해 record id를 자동 수집
+    예: 100.hea -> 100
+    """
+    recs = []
+    for p in mitdb_dir.glob("*.hea"):
+        m = re.match(r"^(\d+)\.hea$", p.name)
+        if m:
+            recs.append(int(m.group(1)))
+    return sorted(set(recs))
+
 def remove_dc(x: np.ndarray) -> np.ndarray:
     return x - np.mean(x)
 
@@ -97,34 +110,33 @@ def calculate_rmse(clean: np.ndarray, processed: np.ndarray) -> float:
 # ===========================
 # Data Loading & Mixing
 # ===========================
-def load_mitdb_csv(mitdb_dir: Path, record: int, start_sample: int, duration_sec: int, fs: int) -> Tuple[
-    np.ndarray, int]:
-    csv_path = mitdb_dir / f"{record}.csv"
-    if not csv_path.exists():
-        raise FileNotFoundError(f"MITDB file not found: {csv_path}")
+def load_mitdb_wfdb(mitdb_dir: Path, record: int, start_sample: int, duration_sec: int) -> Tuple[np.ndarray, int]:
+    """
+    MITDB(.hea/.dat/.atr)에서 ECG 1채널을 읽어오는 함수
+    - 우선순위: MLII -> V5 -> 첫 번째 채널
+    """
+    rec_path = mitdb_dir / str(record)  # 확장자 없이
 
-    df = pd.read_csv(csv_path)
-    df.columns = [c.strip().strip("'").strip('"') for c in df.columns]
+    # wfdb로 샘플 읽기
+    sig, fields = wfdb.rdsamp(str(rec_path))  # sig: (N, n_ch)
+    fs = int(fields["fs"])
+    names = fields.get("sig_name", [])
 
-    if "MLII" in df.columns:
-        ecg = df["MLII"].values
-    elif "V5" in df.columns:
-        ecg = df["V5"].values
-    else:
-        # Fallback to first valid column that isn't Sample #
-        valid_cols = [c for c in df.columns if "Sample" not in c]
-        if valid_cols:
-            ecg = df[valid_cols[0]].values
-        else:
-            raise ValueError(f"No ECG channel found in {csv_path}")
+    # 채널 선택
+    ch = 0
+    if "MLII" in names:
+        ch = names.index("MLII")
+    elif "V5" in names:
+        ch = names.index("V5")
+
+    ecg = sig[:, ch].astype(np.float64)
 
     start = start_sample
     end = start_sample + int(fs * duration_sec)
-    # Handle bounds
     if end > len(ecg):
         end = len(ecg)
 
-    return ecg[start:end].astype(np.float64), fs
+    return ecg[start:end], fs
 
 
 def load_nstdb_noise(nstdb_dir: Path, record: str, start_sample: int, duration_sec: int, fs: int) -> Tuple[
@@ -191,8 +203,8 @@ class DAEConfig:
 
     def to_json(self) -> Dict:
         d = asdict(self)
-        if d["training_records"] is None: d["training_records"] = record_ids_default
-        if d["snr_levels"] is None: d["snr_levels"] = SNR_LEVELS_DEFAULT
+        if d["training_records"] is None:
+            d["training_records"] = list_mitdb_records(MITDB_DIR_DEFAULT)
         return d
 
 
@@ -303,7 +315,8 @@ def main():
     print(">>> Loading Data...")
     all_x, all_t = [], []
 
-    records = cfg.training_records if cfg.training_records else record_ids_default
+    records = list_mitdb_records(MITDB_DIR_DEFAULT)
+    print(f"[MITDB] found {len(records)} records: {records[:10]} ...")
     snrs = cfg.snr_levels if cfg.snr_levels else SNR_LEVELS_DEFAULT
 
     mitdb_dir = MITDB_DIR_DEFAULT
@@ -315,9 +328,9 @@ def main():
 
     for rec in records:
         try:
-            clean, fs = load_mitdb_csv(mitdb_dir, rec, START_SAMPLE_DEFAULT, DURATION_SEC_DEFAULT, FS_DEFAULT)
+            clean, fs_mit = load_mitdb_wfdb(mitdb_dir, rec, START_SAMPLE_DEFAULT, DURATION_SEC_DEFAULT)
             noise, _ = load_nstdb_noise(nstdb_dir, NSTDB_RECORD_DEFAULT, START_SAMPLE_DEFAULT, DURATION_SEC_DEFAULT,
-                                        FS_DEFAULT)
+                                        fs_mit)
         except Exception as e:
             print(f"Skipping Record {rec}: {e}")
             continue
