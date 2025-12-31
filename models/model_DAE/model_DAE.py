@@ -19,7 +19,7 @@ How this repo trains it (see train_DAE.py):
   (2) End-to-end fine-tuning of ImprovedDAE (101-50-50-101) on denoising objective
 
 Important notes / approximations:
-- Weight tying (W' = W^T) is mentioned in some AE literature; this implementation does NOT enforce tied weights.
+- Weight tying (W' = W^T) is mentioned in some AE literature; this implementation does NOT enforce tied weights(common simplification for baseline comparison).
 - Normalization follows the paper’s x∈[0,1]^p mapping:
   We use per-window min-max normalization for the input, and apply the SAME min/max to the target window
   (to keep paired training stable under BCELoss).
@@ -43,7 +43,7 @@ class ImprovedDAE(nn.Module):
         super().__init__()
         if window_len != 101:
             # Paper explicitly uses δ=50 ⇒ 2δ+1 = 101 and architecture 101-50-50-101.
-            # Paper uses δ=50 ⇒ 2δ+1=101. Override only for ablation; keep default=101 for reproduction.
+            # Paper uses δ=50 ⇒ 2δ+1=101. Override only for ablation; keep default=101 to match the paper-reported configuration
             pass
 
         self.window_len = int(window_len)

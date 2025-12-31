@@ -1,195 +1,58 @@
-# -*- coding: utf-8 -*-
 """
 train_DAE.py
 
-Train Improved DAE baseline (Xiong et al., 2016) with Layer-wise Pretraining:
-- Wavelet: Daubechies6 (db6), 8-level, soft thresholding (Eq.1)
-- DAE Structure: 101 -> 50 -> 50 -> 101
-- Activation: Sigmoid (for all layers)
-- Loss: BCELoss (Bernoulli cross-entropy)
-- Pretraining: Greedy Layer-wise (AE1: 101-50-101 -> AE2: 50-50-50)
-- Fine-tuning: End-to-end backpropagation
+Paper-guided baseline training for Improved DAE (Xiong et al., 2016),
+used as a comparative method under a unified benchmark pipeline.
 
-Refactored for Antigravity environment.
+Core idea (paper-guided):
+- Input formation: noisy ECG = clean MITDB segment + NSTDB baseline wander mixed at target SNR
+- Wavelet preprocessing: db6, up to 8-level, scale-adaptive soft-thresholding (inspired by Eq.(1)-(2))
+- Windowing: δ=50 -> window length 101 (sliding windows, reflect padding)
+- Network: Fully-connected 101 -> 50 -> 50 -> 101 with sigmoid activations
+- Objective: Bernoulli distance / cross-entropy -> BCELoss on [0,1]-normalized windows
+- Training: greedy layer-wise pretraining (AE1: 101-50-101, AE2: 50-50-50) + end-to-end fine-tuning
+
+Important implementation notes (baseline comparison focus; not exact reproduction):
+- Normalization: per-window min-max based on the INPUT window; the SAME transform is applied to the target window
+  to keep paired training stable under BCELoss.
+- Sampling rate: signals may be resampled to a project-standard rate (e.g., 250 Hz) for fair comparison across methods.
+- Wavelet reconstruction: this script reconstructs using waverec(cA + all thresholded detail bands);
+  the paper’s optional detail-band selection set D is not explicitly implemented here.
+- Overlap fusion: this script trains on windows; waveform-level overlap-averaging fusion (if used) should be handled
+  in the evaluation/inference code.
+
+This script is intended for baseline training within this repository, not for claiming exact replication of the paper's results.
 """
 
-from __future__ import annotations
 
+from __future__ import annotations
 import argparse
 import json
 import math
-import random
 from dataclasses import asdict, dataclass
-from typing import Dict, Tuple
+from typing import Dict
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
-import wfdb
 import pywt
-import re
-from pathlib import Path
 from typing import List
 
 from models.model_DAE.model_DAE import ImprovedDAE, SingleLayerAE
-
-# ===========================
-# Project Paths (Relative)
-# ===========================
-MITDB_DIR_DEFAULT = Path("/data/MITDB_data")
-NSTDB_DIR_DEFAULT = Path("/data/noise_data")
-OUTPUT_DIR_DEFAULT = Path("../compare_models/methods/Improved_DAE/outputs/dae")
-
-# ===========================
-# Defaults
-# ===========================
-START_SAMPLE_DEFAULT = 0
-DURATION_SEC_DEFAULT = 30
-FS_DEFAULT = 250
-NSTDB_RECORD_DEFAULT = "bw"
-SNR_LEVELS_DEFAULT = [0, 5, 10, 15]
+from common.config import (
+    MITDB_DIR_DEFAULT, NSTDB_DIR_DEFAULT, OUTPUT_DIR_DEFAULT,
+    START_SAMPLE_DEFAULT, DURATION_SEC_DEFAULT, FS_DEFAULT,
+    NSTDB_RECORD_DEFAULT, SNR_LEVELS_DEFAULT,
+)
+from common.dataset_split import list_mitdb_records, split_records
+from common.io_wfdb import load_mitdb_wfdb, load_nstdb_noise
+from common.noise import add_baseline_wander_snr
+from common.repro import set_seed
+from common.utils import _resample_to_target
 
 
-# ===========================
-# Reproducibility
-# ===========================
-def set_seed(seed: int = 42) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
-# ===========================
-# Helpers
-# ===========================
-def list_mitdb_records(mitdb_dir: Path) -> List[int]:
-    """
-    MITDB 폴더에서 *.hea 파일을 스캔해 record id를 자동 수집
-    예: 100.hea -> 100
-    """
-    recs = []
-    for p in mitdb_dir.glob("*.hea"):
-        m = re.match(r"^(\d+)\.hea$", p.name)
-        if m:
-            recs.append(int(m.group(1)))
-    return sorted(set(recs))
-
-
-def split_records(records: List[int], val_ratio: float = 0.15, seed: int = 42):
-    rng = np.random.RandomState(seed)
-    records = sorted(records)
-    perm = rng.permutation(records)
-    n_val = max(1, int(round(len(records) * val_ratio)))
-    val_recs = sorted(perm[:n_val].tolist())
-    train_recs = sorted(perm[n_val:].tolist())
-    return train_recs, val_recs
-
-
-def resample_linear(x: np.ndarray, fs_in: int, fs_out: int) -> np.ndarray:
-    if fs_in == fs_out:
-        return x
-    n_out = int(round(len(x) * fs_out / fs_in))
-    t_in = np.linspace(0, 1, len(x), endpoint=False)
-    t_out = np.linspace(0, 1, n_out, endpoint=False)
-    return np.interp(t_out, t_in, x).astype(np.float64)
-
-
-def remove_dc(x: np.ndarray) -> np.ndarray:
-    return x - np.mean(x)
-
-
-def calculate_snr_db(clean: np.ndarray, est: np.ndarray) -> float:
-    # Use removed-DC version for calculation
-    clean0 = remove_dc(clean)
-    est0 = remove_dc(est)
-    s = clean0
-    e = est0 - clean0
-    ps = np.mean(s ** 2)
-    pe = np.mean(e ** 2)
-    if pe < 1e-12:
-        return float("inf")
-    return 10.0 * np.log10(ps / pe)
-
-
-def calculate_rmse(clean: np.ndarray, processed: np.ndarray) -> float:
-    clean0 = remove_dc(clean)
-    proc0 = remove_dc(processed)
-    return float(np.sqrt(np.mean((clean0 - proc0) ** 2)))
-
-
-# ===========================
-# Data Loading & Mixing
-# ===========================
-def load_mitdb_wfdb(mitdb_dir: Path, record: int, start_sample: int, duration_sec: int) -> Tuple[np.ndarray, int]:
-    """
-    MITDB(.hea/.dat/.atr)에서 ECG 1채널을 읽어오는 함수
-    - 우선순위: MLII -> V5 -> 첫 번째 채널
-    """
-    rec_path = mitdb_dir / str(record)  # 확장자 없이
-
-    # wfdb로 샘플 읽기
-    sig, fields = wfdb.rdsamp(str(rec_path))  # sig: (N, n_ch)
-    fs = int(fields["fs"])
-    names = fields.get("sig_name", [])
-
-    # 채널 선택
-    ch = 0
-    if "MLII" in names:
-        ch = names.index("MLII")
-    elif "V5" in names:
-        ch = names.index("V5")
-
-    ecg = sig[:, ch].astype(np.float64)
-
-    start = start_sample
-    end = start_sample + int(fs * duration_sec)
-    if end > len(ecg):
-        end = len(ecg)
-
-    return ecg[start:end], fs
-
-
-def load_nstdb_noise(nstdb_dir: Path, record: str, start_sample: int, duration_sec: int, fs: int) -> Tuple[
-    np.ndarray, int]:
-    # wfdb reads without extension
-    rec_path = nstdb_dir / record
-    if not (nstdb_dir / (record + ".hea")).exists():
-        raise FileNotFoundError(f"NSTDB header not found: {rec_path}.hea")
-
-    sig, _ = wfdb.rdsamp(str(rec_path))
-    noise = sig[:, 0]
-    end = start_sample + int(fs * duration_sec)
-    if end > len(noise):
-        noise = np.pad(noise, (0, end - len(noise)), mode='wrap')
-
-    return noise[start_sample:end].astype(np.float64), fs
-
-
-def add_baseline_wander_snr(clean_ecg: np.ndarray, bw: np.ndarray, target_snr_db: float) -> Tuple[
-    np.ndarray, np.ndarray, float]:
-    N = min(len(clean_ecg), len(bw))
-    ref = np.asarray(clean_ecg[:N], dtype=np.float64)
-    bw_cut = np.asarray(bw[:N], dtype=np.float64)
-
-    bw0 = remove_dc(bw_cut)
-    ref0 = remove_dc(ref)
-
-    ps = np.mean(ref0 ** 2)
-    pn = np.mean(bw0 ** 2)
-
-    target_noise_power = ps / (10 ** (target_snr_db / 10))
-    scale = np.sqrt(target_noise_power / (pn + 1e-12))
-
-    noisy = ref + bw0 * scale
-    actual_snr = calculate_snr_db(ref, noisy)
-    return noisy, ref, float(actual_snr)
-
+OUTPUT_DIR = OUTPUT_DIR_DEFAULT / "Improved_DAE"
 
 # ===========================
 # Configuration
@@ -197,7 +60,7 @@ def add_baseline_wander_snr(clean_ecg: np.ndarray, bw: np.ndarray, target_snr_db
 @dataclass
 class DAEConfig:
     paper_id: str = "Xiong2016"
-    model_name: str = "ImprovedDAE_Reproduced"
+    model_name: str = "ImprovedDAE_Baseline"
     window_len: int = 101
     hidden1: int = 50
     hidden2: int = 50
@@ -232,6 +95,20 @@ def _soft_threshold(d: np.ndarray, T: float) -> np.ndarray:
 
 
 def wavelet_denoise_db6_level8_soft(x: np.ndarray, level: int = 8) -> np.ndarray:
+    """
+        Wavelet denoise used as a paper-guided preprocessing step.
+
+        - Wavelet: db6
+        - Levels: up to 8 (limited by signal length)
+        - Threshold: scale-adaptive soft-thresholding using MAD-based sigma estimate
+          (inspired by Xiong et al., 2016 Eq.(1)-(2)).
+
+        Note:
+        - We reconstruct via waverec(cA + all thresholded details).
+          The paper also discusses selecting a subset of detail bands (set D);
+          that selection is not explicitly implemented in this baseline training script.
+        """
+
     # Scale-adaptive soft thresholding as per paper Eq.1
     x = np.asarray(x, dtype=np.float64)
     n = x.size
@@ -338,7 +215,7 @@ def main():
 
     # 1. Config & Paths
     cfg = DAEConfig(epochs_pretrain=args.epochs_pre, epochs_finetune=args.epochs_fine)
-    OUTPUT_DIR_DEFAULT.mkdir(exist_ok=True, parents=True)
+    OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
 
     # 2. Data Preparation
     print(">>> Loading Data...")
@@ -364,8 +241,10 @@ def main():
     for rec in records:
         try:
             clean, fs_mit = load_mitdb_wfdb(mitdb_dir, rec, START_SAMPLE_DEFAULT, DURATION_SEC_DEFAULT)
-            noise, _ = load_nstdb_noise(nstdb_dir, NSTDB_RECORD_DEFAULT, START_SAMPLE_DEFAULT, DURATION_SEC_DEFAULT,
-                                        fs_mit)
+            noise, _ = load_nstdb_noise(nstdb_dir, NSTDB_RECORD_DEFAULT,
+                                        START_SAMPLE_DEFAULT, DURATION_SEC_DEFAULT,
+                                        FS_DEFAULT)
+
         except Exception as e:
             print(f"Skipping Record {rec}: {e}")
             continue
@@ -374,8 +253,8 @@ def main():
             noisy, ref, _ = add_baseline_wander_snr(clean, noise, snr)
 
             # 250Hz로 리샘플링 (사용자 의도 반영)
-            noisy = resample_linear(noisy, fs_mit, 250)
-            ref = resample_linear(ref, fs_mit, 250)
+            noisy = _resample_to_target(noisy, fs_raw=fs_mit, fs_target=FS_DEFAULT)
+            ref = _resample_to_target(ref, fs_raw=fs_mit, fs_target=FS_DEFAULT)
 
             # WT Denoising
             wt_denoised = wavelet_denoise_db6_level8_soft(noisy, level=cfg.level)
@@ -483,7 +362,7 @@ def main():
     opt_fine = optim.Adam(final_model.parameters(), lr=cfg.lr_fine)
 
     best_val = float("inf")
-    best_path = OUTPUT_DIR_DEFAULT / "best_model.pth"
+    best_path = OUTPUT_DIR / "best_model.pth"
 
     for ep in range(cfg.epochs_finetune):
         train_loss = train_epoch(final_model, train_loader, opt_fine, crit, device)
@@ -499,14 +378,14 @@ def main():
             print(f"  ★ Saved Best Model: {best_path} (Val Loss: {best_val:.6f})")
 
     # 5. Save Final Config & Model
-    torch.save(final_model.state_dict(), OUTPUT_DIR_DEFAULT / "dae_model_final.pth")
+    torch.save(final_model.state_dict(), OUTPUT_DIR / "dae_model_final.pth")
 
     # Save training records info for reproducibility
     cfg.training_records = train_records
-    with open(OUTPUT_DIR_DEFAULT / "dae_config.json", "w") as f:
+    with open(OUTPUT_DIR / "dae_config.json", "w") as f:
         json.dump(cfg.to_json(), f, indent=4)
 
-    print(f"\nCompleted. Final model saved to {OUTPUT_DIR_DEFAULT}")
+    print(f"\nCompleted. Final model saved to {OUTPUT_DIR}")
 
 
 
