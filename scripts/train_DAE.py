@@ -32,6 +32,7 @@ import math
 from dataclasses import asdict, dataclass
 from typing import Dict
 
+from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
@@ -45,7 +46,8 @@ from common.config import (
     START_SAMPLE_DEFAULT, DURATION_SEC_DEFAULT, FS_DEFAULT,
     NSTDB_RECORD_DEFAULT, SNR_LEVELS_DEFAULT,
 )
-from common.dataset_split import list_mitdb_records, split_records
+from pathlib import Path
+from common.dataset_split import list_mitdb_records
 from common.io_wfdb import load_mitdb_wfdb, load_nstdb_noise
 from common.noise import add_baseline_wander_snr
 from common.repro import set_seed
@@ -83,7 +85,7 @@ class DAEConfig:
     def to_json(self) -> Dict:
         d = asdict(self)
         if d["training_records"] is None:
-            d["training_records"] = list_mitdb_records(MITDB_DIR_DEFAULT)
+            d["training_records"] = []
         return d
 
 
@@ -205,10 +207,21 @@ def eval_epoch(model, loader, crit, device):
 
 def main():
     parser = argparse.ArgumentParser()
+    # 프로젝트 루트 = scripts/의 상위 폴더
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
     parser.add_argument("--epochs_pre", type=int, default=10, help="Pretraining epochs per layer")
     parser.add_argument("--epochs_fine", type=int, default=20, help="Fine-tuning epochs")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--split_path", type=str, default="common/splits.json", help="Path to shared record-wise split JSON")
+
     args = parser.parse_args()
+
+    # ---- split path 처리 (여기가 정답 위치) ----
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    split_path = Path(args.split_path)
+    if not split_path.is_absolute():
+        split_path = PROJECT_ROOT / split_path
 
     set_seed(42)
     device = torch.device(args.device)
@@ -229,16 +242,40 @@ def main():
         print(f"ERROR: No records found in {MITDB_DIR_DEFAULT}")
         return
 
-    # Train/Val Record ID 분리
-    train_records, val_records = split_records(records, val_ratio=0.15, seed=42)
-    print(f"[Split] Total={len(records)} | Train={len(train_records)} | Val={len(val_records)}")
+    # --- Load shared split (train/val/test) ---
+    if not split_path.is_file():
+        raise FileNotFoundError(f"Split file not found: {split_path.resolve()}")
+
+    with open(split_path, "r") as f:
+        splits = json.load(f)
+
+    train_records = set(splits["train"])
+    val_records = set(splits["val"])
+    test_records = set(splits.get("test", []))  # not used here
+
+    # Optional sanity checks
+    overlap_tv = train_records & val_records
+    overlap_tt = train_records & test_records
+    overlap_vt = val_records & test_records
+    missing = (train_records | val_records | test_records) - set(records)
+    if missing:
+        raise ValueError(f"Split contains records not found in MITDB: {sorted(missing)}")
+
+    if overlap_tv or overlap_tt or overlap_vt:
+        raise ValueError("Split sets overlap! Check splits.json")
+
+    print(f"[Split] Using {split_path} | "
+          f"Train={len(train_records)} Val={len(val_records)} Test={len(test_records)}")
 
     snrs = cfg.snr_levels if cfg.snr_levels else SNR_LEVELS_DEFAULT
     mitdb_dir = MITDB_DIR_DEFAULT
     nstdb_dir = NSTDB_DIR_DEFAULT
 
+    # (추천) train/val 레코드만 처리해서 시간 절약 + test 레코드 미사용 보장
+    records_to_use = sorted(list(train_records | val_records))
+
     # 전체 레코드를 돌면서 Train/Val 리스트에 분배
-    for rec in records:
+    for rec in records_to_use:
         try:
             clean, fs_mit = load_mitdb_wfdb(mitdb_dir, rec, START_SAMPLE_DEFAULT, DURATION_SEC_DEFAULT)
             noise, _ = load_nstdb_noise(nstdb_dir, NSTDB_RECORD_DEFAULT,
@@ -381,7 +418,7 @@ def main():
     torch.save(final_model.state_dict(), OUTPUT_DIR / "dae_model_final.pth")
 
     # Save training records info for reproducibility
-    cfg.training_records = train_records
+    cfg.training_records = sorted(list(train_records))
     with open(OUTPUT_DIR / "dae_config.json", "w") as f:
         json.dump(cfg.to_json(), f, indent=4)
 
