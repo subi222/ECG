@@ -242,14 +242,14 @@ def main():
         print(f"ERROR: No records found in {MITDB_DIR_DEFAULT}")
         return
 
-    # --- Load shared split (train/val/test) ---
+    # --- Load shared split (scripts/val/test) ---
     if not split_path.is_file():
         raise FileNotFoundError(f"Split file not found: {split_path.resolve()}")
 
     with open(split_path, "r") as f:
         splits = json.load(f)
 
-    train_records = set(splits["train"])
+    train_records = set(splits["scripts"])
     val_records = set(splits["val"])
     test_records = set(splits.get("test", []))  # not used here
 
@@ -271,7 +271,7 @@ def main():
     mitdb_dir = MITDB_DIR_DEFAULT
     nstdb_dir = NSTDB_DIR_DEFAULT
 
-    # (추천) train/val 레코드만 처리해서 시간 절약 + test 레코드 미사용 보장
+    # (추천) scripts/val 레코드만 처리해서 시간 절약 + test 레코드 미사용 보장
     records_to_use = sorted(list(train_records | val_records))
 
     # 전체 레코드를 돌면서 Train/Val 리스트에 분배

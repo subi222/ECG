@@ -45,11 +45,11 @@ def split_records(
     seed: int = 42
 ) -> Tuple[List[int], List[int]]:
     """
-    MITDB record를 record 단위로 train / validation으로 분리한다.
+    MITDB record를 record 단위로 scripts / validation으로 분리한다.
 
     ❗중요 설계 원칙
     - 반드시 "record 단위"로 분리한다.
-      (같은 record의 window가 train/val에 섞이면 데이터 leakage 발생)
+      (같은 record의 window가 scripts/val에 섞이면 데이터 leakage 발생)
     - seed를 고정해 실험 재현성을 확보한다.
 
     Parameters
@@ -88,7 +88,7 @@ def split_records(
 # common/dataset_split.py
 
 # MITDB record 목록을 가져와
-# train / val / test를 한 번에 나누고
+# scripts / val / test를 한 번에 나누고
 # common/splits.json으로 저장하는 역할만 함
 
 import json
@@ -104,7 +104,7 @@ def create_splits_json(
     out_path: Path = None,
 ) -> Dict[str, List[int]]:
     """
-    Create a fixed record-wise train/val/test split and save it as JSON.
+    Create a fixed record-wise scripts/val/test split and save it as JSON.
 
     - Split is done at the RECORD level (not window level) to avoid data leakage.
     - Ratios must sum to 1.0.
@@ -112,7 +112,7 @@ def create_splits_json(
     """
 
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, \
-        "train/val/test ratios must sum to 1.0"
+        "scripts/val/test ratios must sum to 1.0"
 
     # --- 핵심 수정 ---
     mitdb_dir = Path(mitdb_dir)
@@ -124,14 +124,14 @@ def create_splits_json(
     records = list_mitdb_records(mitdb_dir)
     records = sorted(records)
 
-    # 2) First split: (train + val) vs test
+    # 2) First split: (scripts + val) vs test
     train_val_records, test_records = split_records(
         records,
         val_ratio=test_ratio,
         seed=seed
     )
 
-    # 3) Second split: train vs val
+    # 3) Second split: scripts vs val
     val_ratio_adjusted = val_ratio / (train_ratio + val_ratio)
     train_records, val_records = split_records(
         train_val_records,
@@ -140,7 +140,7 @@ def create_splits_json(
     )
 
     splits = {
-        "train": sorted(train_records),
+        "scripts": sorted(train_records),
         "val": sorted(val_records),
         "test": sorted(test_records),
     }
@@ -156,7 +156,7 @@ def create_splits_json(
         json.dump(splits, f, indent=2)
 
     print("[Split Created]")
-    print(f"  Train: {len(splits['train'])} records")
+    print(f"  Train: {len(splits['scripts'])} records")
     print(f"  Val  : {len(splits['val'])} records")
     print(f"  Test : {len(splits['test'])} records")
     print(f"  Saved to: {out_path}")

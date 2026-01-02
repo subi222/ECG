@@ -81,7 +81,7 @@ This project includes a high-fidelity reproduction of **Improved DAE** (Xiong et
     python compare_models/Improved_DAE/train_DAE.py --epochs_pre 10 --epochs_fine 20
 
     # 2. Run Comparison Benchmark
-    python compare_models/Improved_DAE/run_comparison.py --method all
+    python compare_models/Improved_DAE/evaluate_all.py --method all
     ```
 
 ---

@@ -81,7 +81,7 @@ $$ \text{PRD} = \sqrt{ \frac{\sum_{i=1}^{N} (x_{clean}[i] - \hat{x}_{clean}[i])^
     python compare_models/Improved_DAE/train_DAE.py --epochs_pre 10 --epochs_fine 20
 
     # 2. 비교 벤치마크 실행 (제안 기법 vs DAE vs 웨이블릿)
-    python compare_models/Improved_DAE/run_comparison.py --method all
+    python compare_models/Improved_DAE/evaluate_all.py --method all
     ```
 
 ---
