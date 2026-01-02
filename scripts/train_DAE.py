@@ -39,6 +39,9 @@ import torch.nn as nn
 import torch.optim as optim
 import pywt
 from typing import List
+import csv
+from datetime import datetime
+
 
 from models.model_DAE.model_DAE import ImprovedDAE, SingleLayerAE
 from common.config import (
@@ -230,6 +233,25 @@ def main():
     cfg = DAEConfig(epochs_pretrain=args.epochs_pre, epochs_finetune=args.epochs_fine)
     OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
 
+    # -------------------------
+    # Prepare output artifacts
+    # -------------------------
+    best_path = OUTPUT_DIR / "best_model.pth"
+    log_path = OUTPUT_DIR / "training_log.csv"
+    config_path = OUTPUT_DIR / "config.json"
+
+    # training_log.csv 헤더
+    with open(log_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "stage",  # pretrain_ae1 / pretrain_ae2 / finetune
+            "epoch",  # 1..N
+            "train_loss",
+            "val_loss",
+            "is_best"
+        ])
+    print(f"[Log] {log_path}")
+
     # 2. Data Preparation
     print(">>> Loading Data...")
 
@@ -249,9 +271,12 @@ def main():
     with open(split_path, "r") as f:
         splits = json.load(f)
 
-    train_records = set(splits["scripts"])
+    # train 키가 없고 scripts만 있는 경우도 있으니 호환 처리
+    train_key = "train" if "train" in splits else "scripts"
+
+    train_records = set(splits[train_key])
     val_records = set(splits["val"])
-    test_records = set(splits.get("test", []))  # not used here
+    test_records = set(splits["test"])
 
     # Optional sanity checks
     overlap_tv = train_records & val_records
@@ -348,6 +373,9 @@ def main():
             train_loss += loss.item() * x.size(0)
             cnt += x.size(0)
         print(f"AE1 Epoch {ep + 1}/{cfg.epochs_pretrain} Loss: {train_loss / cnt:.6f}")
+        with open(log_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["pretrain_ae1", ep + 1, f"{(train_loss / cnt):.6f}", "", 0])
 
     # Generate Hidden Features for Layer 2
     print("\nTargeting Hidden Features for Layer 2...")
@@ -381,6 +409,9 @@ def main():
             train_loss += loss.item() * h.size(0)
             cnt += h.size(0)
         print(f"AE2 Epoch {ep + 1}/{cfg.epochs_pretrain} Loss: {train_loss / cnt:.6f}")
+        with open(log_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["pretrain_ae2", ep + 1, f"{(train_loss / cnt):.6f}", "", 0])
 
     # 4. Fine-tuning (End-to-End)
     print("\n=== Stage 3: Fine-tuning Full Network (101 -> 50 -> 50 -> 101) ===")
@@ -399,7 +430,6 @@ def main():
     opt_fine = optim.Adam(final_model.parameters(), lr=cfg.lr_fine)
 
     best_val = float("inf")
-    best_path = OUTPUT_DIR / "best_model.pth"
 
     for ep in range(cfg.epochs_finetune):
         train_loss = train_epoch(final_model, train_loader, opt_fine, crit, device)
@@ -408,22 +438,63 @@ def main():
         print(f"FineTune Epoch {ep + 1}/{cfg.epochs_finetune} "
               f"Train Loss={train_loss:.6f} | Val Loss={val_loss:.6f}")
 
-        # [수정 5] Best Model 저장 로직
+        is_best = False
         if val_loss < best_val:
             best_val = val_loss
+            is_best = True
             torch.save(final_model.state_dict(), best_path)
             print(f"  ★ Saved Best Model: {best_path} (Val Loss: {best_val:.6f})")
 
-    # 5. Save Final Config & Model
-    torch.save(final_model.state_dict(), OUTPUT_DIR / "dae_model_final.pth")
+        # ✅ 매 epoch 로그 저장 (if 밖!)
+        with open(log_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["finetune", ep + 1, f"{train_loss:.6f}", f"{val_loss:.6f}", int(is_best)])
 
     # Save training records info for reproducibility
     cfg.training_records = sorted(list(train_records))
-    with open(OUTPUT_DIR / "dae_config.json", "w") as f:
-        json.dump(cfg.to_json(), f, indent=4)
+    # -------------------------
+    # Save config.json (unified format)
+    # -------------------------
+    run_cfg = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "script": str(Path(__file__).resolve()),
+        "device": str(device),
+        "split_path": str(split_path.resolve()),
+        "output_dir": str(OUTPUT_DIR.resolve()),
+        "data": {
+            "mitdb_dir": str(MITDB_DIR_DEFAULT),
+            "nstdb_dir": str(NSTDB_DIR_DEFAULT),
+            "noise_record": str(NSTDB_RECORD_DEFAULT),
+            "snr_levels": snrs,
+            "fs_target": FS_DEFAULT,
+            "start_sample": START_SAMPLE_DEFAULT,
+            "duration_sec": DURATION_SEC_DEFAULT,
+        },
+        "split_records": {
+            "train": sorted(list(train_records)),
+            "val": sorted(list(val_records)),
+            "test": sorted(list(test_records)),
+        },
+        "hyperparams": {
+            "epochs_pretrain": cfg.epochs_pretrain,
+            "epochs_finetune": cfg.epochs_finetune,
+            "batch_size": cfg.batch_size,
+            "lr_pre": cfg.lr_pre,
+            "lr_fine": cfg.lr_fine,
+            "window_len": cfg.window_len,
+            "hidden1": cfg.hidden1,
+            "hidden2": cfg.hidden2,
+            "wavelet": cfg.wavelet,
+            "level": cfg.level,
+            "seed": cfg.seed,
+        },
+    }
 
-    print(f"\nCompleted. Final model saved to {OUTPUT_DIR}")
-
+    config_path.write_text(json.dumps(run_cfg, indent=2), encoding="utf-8")
+    print(f"[Saved] best_model: {best_path}")
+    print(f"[Saved] training_log: {log_path}")
+    print(f"[Saved] config: {config_path}")
+    print(f"[Done] Outputs saved under: {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":

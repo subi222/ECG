@@ -1,0 +1,96 @@
+{
+  "timestamp": "2026-01-02T14:35:31",
+  "script": "/home/subi/PycharmProjects/ECG/scripts/train_unet.py",
+  "device": "cuda",
+  "args": {
+    "mitdb_dir": "/home/subi/PycharmProjects/ECG/data/MITDB_data",
+    "nstdb_dir": "/home/subi/PycharmProjects/ECG/data/noise_data",
+    "splits": "/home/subi/PycharmProjects/ECG/common/splits.json",
+    "noise": "bw",
+    "snr_list": [
+      0,
+      5,
+      10,
+      15
+    ],
+    "fs": 250,
+    "start_sample": 0,
+    "duration_sec": 30,
+    "win_len": 512,
+    "hop_len": 512,
+    "normalize": "minmax_by_noisy",
+    "batch": 32,
+    "epochs": 50,
+    "lr": 0.001,
+    "seed": 42,
+    "out_dir": "/home/subi/PycharmProjects/ECG/outputs/UNet"
+  },
+  "paths": {
+    "mitdb_dir": "/home/subi/PycharmProjects/ECG/data/MITDB_data",
+    "nstdb_dir": "/home/subi/PycharmProjects/ECG/data/noise_data",
+    "splits": "/home/subi/PycharmProjects/ECG/common/splits.json",
+    "out_dir": "/home/subi/PycharmProjects/ECG/outputs/UNet"
+  },
+  "split_records": {
+    "train": [
+      100,
+      101,
+      102,
+      103,
+      105,
+      106,
+      107,
+      109,
+      111,
+      112,
+      114,
+      116,
+      117,
+      118,
+      119,
+      121,
+      123,
+      124,
+      200,
+      202,
+      209,
+      210,
+      212,
+      213,
+      214,
+      215,
+      217,
+      220,
+      221,
+      223,
+      228,
+      231,
+      232,
+      233
+    ],
+    "val": [
+      104,
+      108,
+      115,
+      122,
+      207,
+      208,
+      234
+    ]
+  },
+  "data": {
+    "noise_record": "bw",
+    "snr_levels": [
+      0,
+      5,
+      10,
+      15
+    ],
+    "fs_target": 250,
+    "start_sample": 0,
+    "duration_sec": 30,
+    "win_len": 512,
+    "hop_len": 512,
+    "normalize": "minmax_by_noisy"
+  }
+}

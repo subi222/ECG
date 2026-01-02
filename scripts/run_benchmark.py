@@ -1,10 +1,11 @@
 # scripts/run_benchmark.py
 import argparse
 import sys
+import numpy as np
+import torch
 from pathlib import Path
 from typing import Dict, Optional
 
-import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]  # scripts/ 의 상위 = 프로젝트 루트
 sys.path.insert(0, str(ROOT))
@@ -14,10 +15,9 @@ from benchmark_core import BenchmarkArgs, RunContext, RunnerFn, run_benchmark
 
 # 우리 알고리즘 (v37)
 from models.model_proposed.v37_standalone import v37_baseline_correction
-
-# Improved DAE
-import torch
+# 타모델
 from models.model_DAE.model_DAE import ImprovedDAE
+from models.model_UNet import UNet
 
 
 # -------------------------
@@ -166,6 +166,153 @@ def run_method_dae(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
         batch_size=ARGS.dae_batch,
     )
 
+# -------------------------
+# UNet 1D runner (Universal multi-SNR trained)
+# -------------------------
+_UNET_MODEL: Optional[UNet] = None
+_UNET_DEVICE: Optional[torch.device] = None
+
+
+def _load_unet_model(ckpt_path: Path, device: str = "cpu") -> UNet:
+    """
+    ckpt 로딩 규칙:
+    - torch.save(model.state_dict()) 형태면 state_dict 로드
+    - torch.save({"state_dict":..., ...}) 형태면 내부 키 탐색
+    """
+    global _UNET_MODEL, _UNET_DEVICE
+    _UNET_DEVICE = torch.device(device)
+
+    model = UNet(in_channels=1, out_classes=1, dimensions=1, padding=True)
+    obj = torch.load(str(ckpt_path), map_location=_UNET_DEVICE)
+
+    if isinstance(obj, dict):
+        if "state_dict" in obj:
+            sd = obj["state_dict"]
+        elif "model" in obj:
+            sd = obj["model"]
+        else:
+            sd = obj
+    else:
+        sd = obj
+
+    # DataParallel prefix 처리
+    sd2 = {}
+    for k, v in sd.items():
+        kk = k
+        if kk.startswith("module."):
+            kk = kk[len("module."):]
+        sd2[kk] = v
+
+    model.load_state_dict(sd2, strict=False)
+    model.to(_UNET_DEVICE).eval()
+    _UNET_MODEL = model
+    return model
+
+
+def _unet_denoise_fullsignal(
+    x: np.ndarray,
+    model: UNet,
+    device: torch.device,
+    win_len: int = 512,
+    hop_len: int = 512,
+    batch_size: int = 64,
+    normalize: str = "minmax_by_noisy",
+) -> np.ndarray:
+    """
+    train_unet.py와 동일한 윈도우/정규화 규칙으로 추론:
+      - normalize="minmax_by_noisy":
+          x_win min/max로 x_norm, y_norm 둘 다 같은 denom 사용
+          pred는 y_norm이므로 같은 min/max로 역정규화
+      - overlap-add 평균으로 full signal 복원
+    """
+    x = np.asarray(x, dtype=np.float32)
+    N = x.size
+    if N == 0:
+        return x
+
+    if hop_len <= 0:
+        raise ValueError("hop_len must be positive.")
+    if win_len <= 0:
+        raise ValueError("win_len must be positive.")
+    if N < win_len:
+        # 짧으면 reflect pad로 1윈도우 처리
+        pad = win_len - N
+        x_pad = np.pad(x, (0, pad), mode="reflect")
+        Np = x_pad.size
+    else:
+        x_pad = x
+        Np = N
+
+    # 시작 인덱스 (마지막이 win_len을 넘지 않도록)
+    starts = np.arange(0, Np - win_len + 1, hop_len, dtype=np.int64)
+
+    out_sum = np.zeros(Np, dtype=np.float32)
+    out_cnt = np.zeros(Np, dtype=np.float32)
+
+    model.eval()
+    with torch.no_grad():
+        for i in range(0, len(starts), batch_size):
+            s_batch = starts[i:i + batch_size]
+            # (B, 1, L)
+            windows = np.stack([x_pad[s:s + win_len] for s in s_batch], axis=0).astype(np.float32)
+            windows = windows[:, None, :]  # add channel dim
+
+            if normalize == "minmax_by_noisy":
+                # per-window min/max (batch, 1, 1) for broadcasting
+                w_min = windows.min(axis=2, keepdims=True)
+                w_max = windows.max(axis=2, keepdims=True)
+                denom = (w_max - w_min)
+                denom_safe = np.where(denom < 1e-8, 1.0, denom)
+
+                w_norm = (windows - w_min) / denom_safe
+                w_norm = np.clip(w_norm, 0.0, 1.0)
+
+                inp = torch.from_numpy(w_norm).to(device=device, dtype=torch.float32)
+                pred_norm = model(inp).detach().cpu().numpy().astype(np.float32)  # (B,1,L)
+
+                # 역정규화: y = y_norm * denom + x_min
+                pred = pred_norm * denom_safe + w_min
+
+            elif normalize == "none":
+                inp = torch.from_numpy(windows).to(device=device, dtype=torch.float32)
+                pred = model(inp).detach().cpu().numpy().astype(np.float32)
+            else:
+                raise ValueError("normalize must be 'minmax_by_noisy' or 'none'")
+
+            # overlap-add
+            for j, s in enumerate(s_batch):
+                out_sum[s:s + win_len] += pred[j, 0, :]
+                out_cnt[s:s + win_len] += 1.0
+
+    out = out_sum / np.maximum(out_cnt, 1.0)
+
+    # 원래 길이로 자르기(짧은 입력 pad 케이스 포함)
+    out = out[:N]
+    return out.astype(np.float32)
+
+
+def run_method_unet(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
+    """
+    Universal UNet:
+    - train_unet.py 결과 best_model.pth 로드
+    - 윈도우 기반 overlap-add로 full signal denoise
+    """
+    if ARGS.unet_ckpt is None:
+        raise ValueError("UNet method selected but --unet_ckpt is not provided.")
+
+    global _UNET_MODEL, _UNET_DEVICE
+    if _UNET_MODEL is None:
+        _load_unet_model(Path(ARGS.unet_ckpt), device=ctx.device or ARGS.device)
+
+    return _unet_denoise_fullsignal(
+        x_in,
+        model=_UNET_MODEL,
+        device=_UNET_DEVICE,
+        win_len=ARGS.unet_win_len,
+        hop_len=ARGS.unet_hop_len,
+        batch_size=ARGS.unet_batch,
+        normalize=ARGS.unet_normalize,
+    )
 
 # -------------------------
 # Registry
@@ -174,6 +321,7 @@ def build_method_registry() -> Dict[str, RunnerFn]:
     return {
         "proposed": run_method_proposed,
         "dae": run_method_dae,
+        "unet": run_method_unet,
         # unet1d 등 다른 모델은 나중에 추가
     }
 
@@ -183,7 +331,7 @@ def build_method_registry() -> Dict[str, RunnerFn]:
 # -------------------------
 def parse_args():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--split_path", type=str, default=str(Path("common/splits.json")))
+    ap.add_argument("--split_path", type=str, default=str(ROOT / "common" / "splits.json"))
     ap.add_argument("--split", type=str, default="test")
     ap.add_argument("--methods", type=str, default="proposed", help="comma separated: proposed,dae")
     ap.add_argument("--noise_rec", type=str, default="bw", choices=["bw", "ma", "em"])
@@ -204,6 +352,14 @@ def parse_args():
     ap.add_argument("--dae_ckpt", type=str, default=None, help="path to trained DAE .pth/.pt")
     ap.add_argument("--dae_stride", type=int, default=1, help="window stride (1=best, larger=faster)")
     ap.add_argument("--dae_batch", type=int, default=512, help="DAE inference batch size")
+
+    # UNet options
+    ap.add_argument("--unet_ckpt", type=str, default=None, help="path to trained UNet best_model.pth")
+    ap.add_argument("--unet_win_len", type=int, default=512, help="UNet inference window length (must match training)")
+    ap.add_argument("--unet_hop_len", type=int, default=512, help="UNet inference hop length (overlap if < win_len)")
+    ap.add_argument("--unet_batch", type=int, default=64, help="UNet inference batch size")
+    ap.add_argument("--unet_normalize", type=str, default="minmax_by_noisy", choices=["minmax_by_noisy", "none"])
+
 
     return ap.parse_args()
 
@@ -236,12 +392,16 @@ def main():
 
 def apply_preset(args):
     if args.preset == "paper":
-        args.methods = "proposed,dae"
+        args.methods = "proposed,dae,unet"
         args.snrs = "0,5,10,15"
         args.plot_one = True
-        args.plot_rec = ""   # 모든 rec (
-        args.out_dir = "outputs/paper_benchmark"
+        args.plot_rec = ""   # 모든 rec
+        args.out_dir = str(ROOT / "outputs" / "paper_benchmark")
         args.dae_ckpt = "/home/subi/PycharmProjects/ECG/outputs/Improved_DAE/best_model.pth"
+        args.unet_ckpt = "/home/subi/PycharmProjects/ECG/outputs/UNet/best_model.pth"
+        args.unet_win_len = 512
+        args.unet_hop_len = 512
+        args.unet_normalize = "minmax_by_noisy"
 
     elif args.preset == "debug":
         args.methods = "proposed"

@@ -155,7 +155,8 @@ def read_mitdb_segment(rec_id: str, start_sec: int, duration_sec: int) -> Tuple[
         return io_wfdb.read_record_segment(rec_id, start_sec, duration_sec)
 
     import wfdb  # local import
-    mitdb_root = Path(cfg.MITDB_DIR) if hasattr(cfg, "MITDB_DIR") else Path("data/MITDB_data")
+    ROOT = Path(__file__).resolve().parents[1]  # .../ECG
+    mitdb_root = Path(cfg.MITDB_DIR) if hasattr(cfg, "MITDB_DIR") else (ROOT / "data" / "MITDB_data")
     record_path = str(mitdb_root / str(rec_id))
     record = wfdb.rdrecord(record_path)
     fs = float(record.fs)
@@ -174,7 +175,8 @@ def read_rpeaks(rec_id: str, start_sec: int, duration_sec: int) -> Tuple[np.ndar
         return io_wfdb.read_rpeaks_segment(rec_id, start_sec, duration_sec)
 
     import wfdb  # local import
-    mitdb_root = Path(cfg.MITDB_DIR) if hasattr(cfg, "MITDB_DIR") else Path("data/MITDB_data")
+    ROOT = Path(__file__).resolve().parents[1]  # .../ECG
+    mitdb_root = Path(cfg.MITDB_DIR) if hasattr(cfg, "MITDB_DIR") else (ROOT / "data" / "MITDB_data")
     record_path = str(mitdb_root / str(rec_id))
     ann = wfdb.rdann(record_path, "atr")
     r_all = np.asarray(ann.sample, dtype=np.int64)
@@ -185,13 +187,16 @@ def read_rpeaks(rec_id: str, start_sec: int, duration_sec: int) -> Tuple[np.ndar
     r_seg = r_all[(r_all >= s) & (r_all < e)] - s
     return r_seg.astype(np.int64), fs_raw
 
-
 def read_noise_segment(noise_rec: str, start_sec: int, duration_sec: int) -> Tuple[np.ndarray, float]:
     if hasattr(io_wfdb, "read_noise_segment"):
         return io_wfdb.read_noise_segment(noise_rec, start_sec, duration_sec)
 
     import wfdb  # local import
-    noise_root = Path(cfg.NOISE_DIR) if hasattr(cfg, "NOISE_DIR") else Path("data/noise_data")
+
+    # ✅ 프로젝트 루트 기준으로 noise_data 경로 고정
+    ROOT = Path(__file__).resolve().parents[1]   # .../ECG
+    noise_root = ROOT / "data" / "noise_data"
+
     sig, fields = wfdb.rdsamp(str(noise_root / noise_rec))
     fs = float(fields["fs"])
     n = sig[:, 0].astype(np.float32)
@@ -202,7 +207,6 @@ def read_noise_segment(noise_rec: str, start_sec: int, duration_sec: int) -> Tup
     if n_seg.size == 0:
         raise ValueError(f"Empty noise segment noise_rec={noise_rec}")
     return n_seg, fs
-
 
 # -------------------------
 # Core runner config & context
@@ -320,7 +324,7 @@ def run_benchmark(
                 )
 
                 # ✅ 모든 test rec의 0dB plot 저장
-                if args.plot_one and (snr_tgt in [0, 5]):
+                if args.plot_one and (snr_tgt in [0, 5, 10, 15]):
                     out_png = plot_dir / f"{method}_rec_{rec_id}_snr{int(snr_tgt)}dB.png"
                     save_tripanel_plot(
                         out_png=out_png,
