@@ -26,6 +26,13 @@ This script is intended for baseline training within this repository, not for cl
 
 
 from __future__ import annotations
+import sys
+from pathlib import Path
+
+# Add project root to sys.path
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
 import argparse
 import json
 import math

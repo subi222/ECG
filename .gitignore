@@ -1,0 +1,21 @@
+
+# Valid VSCode project ignores
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Outputs
+outputs/
+
+# Archive
+# archive/
+
+# Plots (User request)
+*.png

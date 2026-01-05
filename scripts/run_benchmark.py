@@ -5,6 +5,8 @@ import numpy as np
 import torch
 from pathlib import Path
 from typing import Dict, Optional
+import math
+import pywt
 
 
 ROOT = Path(__file__).resolve().parents[1]  # scripts/ 의 상위 = 프로젝트 루트
@@ -16,7 +18,7 @@ from benchmark_core import BenchmarkArgs, RunContext, RunnerFn, run_benchmark
 # 우리 알고리즘 (v37)
 from models.model_proposed.v37_standalone import v37_baseline_correction
 # 타모델
-from models.model_DAE.model_DAE import ImprovedDAE
+# from models.model_DAE.model_DAE import ImprovedDAE
 from models.model_UNet import UNet
 
 
@@ -34,137 +36,22 @@ def run_method_proposed(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     return y.astype(np.float32)
 
 
+
 # -------------------------
-# Improved DAE runner
+# Improved DAE runner (ARCHIVED)
 # -------------------------
-_DAE_MODEL: Optional[ImprovedDAE] = None
-_DAE_DEVICE: Optional[torch.device] = None
+# _DAE_MODEL: Optional[ImprovedDAE] = None
+# _DAE_DEVICE: Optional[torch.device] = None
+#
+# def _load_dae_model(ckpt_path: Path, device: str = "cpu") -> ImprovedDAE:
+#     ... (Moved to archive)
+#
+# def _dae_denoise_fullsignal(...):
+#     ... (Moved to archive)
+#
+# def run_method_dae(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
+#     raise NotImplementedError("DAE method has been archived. See archive/abandoned_DAE.")
 
-
-def _load_dae_model(ckpt_path: Path, device: str = "cpu") -> ImprovedDAE:
-    """
-    ckpt 로딩 규칙:
-    - torch.save(model.state_dict()) 형태면 state_dict 로드
-    - torch.save({"model": state_dict, ...}) 형태면 내부 키 탐색
-    """
-    global _DAE_MODEL, _DAE_DEVICE
-    _DAE_DEVICE = torch.device(device)
-
-    model = ImprovedDAE(window_len=101)
-    obj = torch.load(str(ckpt_path), map_location=_DAE_DEVICE)
-
-    if isinstance(obj, dict):
-        if "state_dict" in obj:
-            sd = obj["state_dict"]
-        elif "model" in obj:
-            sd = obj["model"]
-        else:
-            # state_dict처럼 보이는 dict일 수도 있음
-            sd = obj
-    else:
-        sd = obj
-
-    # DataParallel/Lightning prefix 처리
-    sd2 = {}
-    for k, v in sd.items():
-        kk = k
-        if kk.startswith("module."):
-            kk = kk[len("module."):]
-        if kk.startswith("net."):
-            # model_DAE.ImprovedDAE 는 self.net 안에 Sequential을 들고 있으니
-            # 저장 구조에 따라 net. prefix가 있을 수 있음
-            pass
-        sd2[kk] = v
-
-    model.load_state_dict(sd2, strict=False)
-    model.to(_DAE_DEVICE).eval()
-    _DAE_MODEL = model
-    return model
-
-
-def _dae_denoise_fullsignal(
-    x: np.ndarray,
-    model: ImprovedDAE,
-    device: torch.device,
-    window_len: int = 101,
-    stride: int = 1,
-    batch_size: int = 512,
-) -> np.ndarray:
-    """
-    model_DAE 문서에 맞춰:
-    - 윈도우 단위로 [0,1] min-max 정규화 (윈도우별)
-    - 출력도 [0,1]이므로 같은 min/max로 역정규화
-    - overlap-add 평균으로 전체 시계열 복원
-    :contentReference[oaicite:5]{index=5}
-    """
-    x = np.asarray(x, dtype=np.float32)
-    N = x.size
-    if N == 0:
-        return x
-
-    radius = window_len // 2
-    x_pad = np.pad(x, (radius, radius), mode="reflect")
-    Np = x_pad.size
-
-    # 시작 인덱스들 (pad 기준)
-    starts = np.arange(0, Np - window_len + 1, stride, dtype=np.int64)
-
-    out_sum = np.zeros(Np, dtype=np.float32)
-    out_cnt = np.zeros(Np, dtype=np.float32)
-
-    # 배치 처리
-    model.eval()
-    with torch.no_grad():
-        for i in range(0, len(starts), batch_size):
-            s_batch = starts[i:i + batch_size]
-            # (B, 101)
-            windows = np.stack([x_pad[s:s + window_len] for s in s_batch], axis=0).astype(np.float32)
-
-            w_min = windows.min(axis=1, keepdims=True)
-            w_max = windows.max(axis=1, keepdims=True)
-            denom = (w_max - w_min)
-            denom_safe = np.where(denom < 1e-8, 1.0, denom)
-
-            w_norm = (windows - w_min) / denom_safe
-            w_norm = np.clip(w_norm, 0.0, 1.0)
-
-            inp = torch.from_numpy(w_norm).to(device=device, dtype=torch.float32)
-            pred = model(inp).detach().cpu().numpy().astype(np.float32)
-
-            # 역정규화
-            pred_denorm = pred * denom_safe + w_min
-
-            # overlap-add
-            for j, s in enumerate(s_batch):
-                out_sum[s:s + window_len] += pred_denorm[j]
-                out_cnt[s:s + window_len] += 1.0
-
-    out = out_sum / np.maximum(out_cnt, 1.0)
-    # pad 제거 -> 원래 길이
-    out = out[radius:radius + N]
-    return out.astype(np.float32)
-
-
-def run_method_dae(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
-    """
-    ctx.device는 benchmark_core에서 넘김.
-    ckpt_path는 전역 ARGS에서 설정(아래 parse_args 참고)
-    """
-    if ARGS.dae_ckpt is None:
-        raise ValueError("DAE method selected but --dae_ckpt is not provided.")
-
-    global _DAE_MODEL, _DAE_DEVICE
-    if _DAE_MODEL is None:
-        _load_dae_model(Path(ARGS.dae_ckpt), device=ctx.device or ARGS.device)
-
-    return _dae_denoise_fullsignal(
-        x_in,
-        model=_DAE_MODEL,
-        device=_DAE_DEVICE,
-        window_len=101,
-        stride=ARGS.dae_stride,
-        batch_size=ARGS.dae_batch,
-    )
 
 # -------------------------
 # UNet 1D runner (Universal multi-SNR trained)
@@ -320,7 +207,7 @@ def run_method_unet(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
 def build_method_registry() -> Dict[str, RunnerFn]:
     return {
         "proposed": run_method_proposed,
-        "dae": run_method_dae,
+        # "dae": run_method_dae,
         "unet": run_method_unet,
         # unet1d 등 다른 모델은 나중에 추가
     }
@@ -392,13 +279,13 @@ def main():
 
 def apply_preset(args):
     if args.preset == "paper":
-        args.methods = "proposed,dae,unet"
+        args.methods = "proposed,unet" # dae removed
         args.snrs = "0,5,10,15"
         args.plot_one = True
         args.plot_rec = ""   # 모든 rec
         args.out_dir = str(ROOT / "outputs" / "paper_benchmark")
-        args.dae_ckpt = "/home/subi/PycharmProjects/ECG/outputs/Improved_DAE/best_model.pth"
-        args.unet_ckpt = "/home/subi/PycharmProjects/ECG/outputs/UNet/best_model.pth"
+        # args.dae_ckpt = str(ROOT / "outputs" / "Improved_DAE" / "best_model.pth")
+        args.unet_ckpt = str(ROOT / "outputs" / "UNet" / "best_model.pth")
         args.unet_win_len = 512
         args.unet_hop_len = 512
         args.unet_normalize = "minmax_by_noisy"
