@@ -18,7 +18,6 @@ from benchmark_core import BenchmarkArgs, RunContext, RunnerFn, run_benchmark
 # 우리 알고리즘 (v37)
 from models.model_proposed.v37_standalone import v37_baseline_correction
 # 타모델
-# from models.model_DAE.model_DAE import ImprovedDAE
 from models.model_UNet import UNet
 
 

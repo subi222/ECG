@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-01-02T14:35:31",
-  "script": "/home/subi/PycharmProjects/ECG/scripts/train_unet.py",
+  "timestamp": "2026-01-06T17:23:32",
+  "script": "/home/subi/VSCodeProjects/ECG/scripts/train_unet.py",
   "device": "cuda",
   "args": {
     "mitdb_dir": "/home/subi/PycharmProjects/ECG/data/MITDB_data",
     "nstdb_dir": "/home/subi/PycharmProjects/ECG/data/noise_data",
-    "splits": "/home/subi/PycharmProjects/ECG/common/splits.json",
+    "splits": "/home/subi/VSCodeProjects/ECG/common/splits.json",
     "noise": "bw",
     "snr_list": [
       0,
@@ -20,16 +20,16 @@
     "hop_len": 512,
     "normalize": "minmax_by_noisy",
     "batch": 32,
-    "epochs": 50,
+    "epochs": 20,
     "lr": 0.001,
     "seed": 42,
-    "out_dir": "/home/subi/PycharmProjects/ECG/outputs/UNet"
+    "out_dir": "/home/subi/VSCodeProjects/ECG/outputs/UNet"
   },
   "paths": {
     "mitdb_dir": "/home/subi/PycharmProjects/ECG/data/MITDB_data",
     "nstdb_dir": "/home/subi/PycharmProjects/ECG/data/noise_data",
-    "splits": "/home/subi/PycharmProjects/ECG/common/splits.json",
-    "out_dir": "/home/subi/PycharmProjects/ECG/outputs/UNet"
+    "splits": "/home/subi/VSCodeProjects/ECG/common/splits.json",
+    "out_dir": "/home/subi/VSCodeProjects/ECG/outputs/UNet"
   },
   "split_records": {
     "train": [
