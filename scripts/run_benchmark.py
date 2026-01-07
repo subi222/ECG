@@ -17,8 +17,8 @@ from benchmark_core import BenchmarkArgs, RunContext, RunnerFn, run_benchmark
 
 # 우리 알고리즘 (v37)
 from models.model_proposed.v37_standalone import v37_baseline_correction
-# 타모델
-from models.model_UNet import UNet
+# 타모델 (ARCHIVED)
+# from models.model_UNet import UNet
 
 
 # -------------------------
@@ -58,7 +58,7 @@ _UNET_MODEL: Optional[UNet] = None
 _UNET_DEVICE: Optional[torch.device] = None
 
 
-def _load_unet_model(ckpt_path: Path, device: str = "cpu") -> UNet:
+# def _load_unet_model(ckpt_path: Path, device: str = "cpu") -> UNet:
     """
     ckpt 로딩 규칙:
     - torch.save(model.state_dict()) 형태면 state_dict 로드
@@ -176,7 +176,7 @@ def _unet_denoise_fullsignal(
     return out.astype(np.float32)
 
 
-def run_method_unet(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
+# def run_method_unet(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     """
     Universal UNet:
     - train_unet.py 결과 best_model.pth 로드
@@ -205,9 +205,8 @@ def run_method_unet(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
 def build_method_registry() -> Dict[str, RunnerFn]:
     return {
         "proposed": run_method_proposed,
-        # "dae": run_method_dae,
-        "unet": run_method_unet,
-        # unet1d 등 다른 모델은 나중에 추가
+        # "dae": run_method_dae,  # ARCHIVED
+        # "unet": run_method_unet,  # ARCHIVED (general-purpose model)
     }
 
 
@@ -277,7 +276,7 @@ def main():
 
 def apply_preset(args):
     if args.preset == "paper":
-        args.methods = "proposed,unet" # dae removed
+        args.methods = "proposed"  # dae and unet removed (archived)
         args.snrs = "0,5,10,15"
         args.plot_one = True
         args.plot_rec = ""   # 모든 rec
