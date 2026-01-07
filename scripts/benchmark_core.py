@@ -26,17 +26,14 @@ from common import utils
 DETAIL_HEADER = [
     "method", "rec_id", "noise_rec", "snr_target_db",
     "snr_in_db", "snr_out_db", "snr_improve_db",
-    "nrmse_std", "prd_percent",
+    "rmse", "prd_percent",
     "N"
 ]
 
 SUMMARY_HEADER = [
     "method", "noise_rec", "snr_target_db", "count",
-    "snr_in_mean", "snr_in_std",
     "snr_out_mean", "snr_out_std",
-    "snr_improve_mean", "snr_improve_std",
-    "nrmse_mean", "nrmse_std",
-    "prd_mean", "prd_std"
+    "rmse_mean", "rmse_std"
 ]
 
 
@@ -307,20 +304,19 @@ def run_benchmark(
                 # 평가 (모델 출력 이후 공통)
                 snr_out = float(metrics.calculate_snr_db(ref_eval, out_eval, remove_mean=True))
                 rmse = float(metrics.calculate_rmse(ref_eval, out_eval))
-                nrmse = float(metrics.calculate_nrmse(ref_eval, out_eval, mode="std"))
                 prd = float(metrics.calculate_prd(ref_eval, out_eval, remove_mean=True))
-                imp = float(snr_out - float(snr_in))
+                snr_improve = float(snr_out - float(snr_in))
 
                 detail_rows.append([
                     method, rec_id, args.noise_rec, float(snr_tgt),
-                    float(snr_in), snr_out, imp,
-                    nrmse, prd,
+                    float(snr_in), snr_out, snr_improve,
+                    rmse, prd,
                     int(N)
                 ])
                 print(
                     f"[{method}] rec={rec_id} snr={snr_tgt}dB "
-                    f"in={snr_in:.2f} out={snr_out:.2f} imp={imp:.2f} "
-                    f"rmse={rmse:.6f} nrmse={nrmse:.6f} prd={prd:.2f}%"
+                    f"in={snr_in:.2f} out={snr_out:.2f} imp={snr_improve:.2f} "
+                    f"rmse={rmse:.6f} prd={prd:.2f}%"
                 )
 
                 # ✅ 모든 test rec의 0dB plot 저장
@@ -360,19 +356,13 @@ def run_benchmark(
         ]
         count = len(rows_g)
 
-        snr_in_mean, snr_in_std = _mean_std([float(r[idx["snr_in_db"]]) for r in rows_g])
         snr_out_mean, snr_out_std = _mean_std([float(r[idx["snr_out_db"]]) for r in rows_g])
-        imp_mean, imp_std = _mean_std([float(r[idx["snr_improve_db"]]) for r in rows_g])
-        nrmse_mean, nrmse_std = _mean_std([float(r[idx["nrmse_std"]]) for r in rows_g])
-        prd_mean, prd_std = _mean_std([float(r[idx["prd_percent"]]) for r in rows_g])
+        rmse_mean, rmse_std = _mean_std([float(r[idx["rmse"]]) for r in rows_g])
 
         summary_rows.append([
             method, noise_rec, float(snr_tgt), count,
-            snr_in_mean, snr_in_std,
             snr_out_mean, snr_out_std,
-            imp_mean, imp_std,
-            nrmse_mean, nrmse_std,
-            prd_mean, prd_std
+            rmse_mean, rmse_std
         ])
 
     summary_csv = csv_dir / "results_summary.csv"

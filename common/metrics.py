@@ -36,29 +36,6 @@ def calculate_rmse(clean, processed):
     proc0  = remove_dc(np.asarray(processed, dtype=np.float64))
     return float(np.sqrt(np.mean((clean0 - proc0) ** 2)))
 
-def calculate_nrmse(clean, processed, mode="std"):
-    """
-    NRMSE (DC 제거 후)
-    mode:
-      - "std"  : RMSE / std(clean0)        (많이 씀, run_synthetic_test에서 보던 형태)
-      - "range": RMSE / (max-min)          (범위 정규화)
-      - "rms"  : RMSE / rms(clean0)
-    """
-    clean0 = remove_dc(np.asarray(clean, dtype=np.float64))
-    proc0  = remove_dc(np.asarray(processed, dtype=np.float64))
-    rmse = np.sqrt(np.mean((clean0 - proc0) ** 2))
-
-    if mode == "std":
-        denom = np.std(clean0) + EPS
-    elif mode == "range":
-        denom = (np.max(clean0) - np.min(clean0)) + EPS
-    elif mode == "rms":
-        denom = np.sqrt(np.mean(clean0 ** 2)) + EPS
-    else:
-        raise ValueError('mode must be one of {"std","range","rms"}')
-
-    return float(rmse / denom)
-
 def calculate_prd(clean, processed, remove_mean=True):
     """
     PRD (%): 100 * ||clean - processed|| / ||clean||

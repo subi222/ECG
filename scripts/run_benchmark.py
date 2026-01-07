@@ -35,7 +35,6 @@ def run_method_proposed(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     return y.astype(np.float32)
 
 
-
 # -------------------------
 # Improved DAE runner (ARCHIVED)
 # -------------------------
