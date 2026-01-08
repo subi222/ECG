@@ -20,6 +20,11 @@ from models.model_proposed.v37_standalone import v37_baseline_correction
 # 타모델 (ARCHIVED)
 # from models.model_UNet import UNet
 
+# DeepFilter (Keras)
+import keras
+import tensorflow as tf
+from models.model_DeepFilter import deepfilter
+
 
 # -------------------------
 # Proposed runner (v37)
@@ -54,49 +59,49 @@ def run_method_proposed(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
 # -------------------------
 # UNet 1D runner (Universal multi-SNR trained)
 # -------------------------
-_UNET_MODEL: Optional[UNet] = None
-_UNET_DEVICE: Optional[torch.device] = None
+# _UNET_MODEL: Optional[UNet] = None
+# _UNET_DEVICE: Optional[torch.device] = None
 
 
 # def _load_unet_model(ckpt_path: Path, device: str = "cpu") -> UNet:
-    """
-    ckpt 로딩 규칙:
-    - torch.save(model.state_dict()) 형태면 state_dict 로드
-    - torch.save({"state_dict":..., ...}) 형태면 내부 키 탐색
-    """
-    global _UNET_MODEL, _UNET_DEVICE
-    _UNET_DEVICE = torch.device(device)
-
-    model = UNet(in_channels=1, out_classes=1, dimensions=1, padding=True)
-    obj = torch.load(str(ckpt_path), map_location=_UNET_DEVICE)
-
-    if isinstance(obj, dict):
-        if "state_dict" in obj:
-            sd = obj["state_dict"]
-        elif "model" in obj:
-            sd = obj["model"]
-        else:
-            sd = obj
-    else:
-        sd = obj
-
-    # DataParallel prefix 처리
-    sd2 = {}
-    for k, v in sd.items():
-        kk = k
-        if kk.startswith("module."):
-            kk = kk[len("module."):]
-        sd2[kk] = v
-
-    model.load_state_dict(sd2, strict=False)
-    model.to(_UNET_DEVICE).eval()
-    _UNET_MODEL = model
-    return model
+#     """
+#     ckpt 로딩 규칙:
+#     - torch.save(model.state_dict()) 형태면 state_dict 로드
+#     - torch.save({"state_dict":..., ...}) 형태면 내부 키 탐색
+#     """
+#     global _UNET_MODEL, _UNET_DEVICE
+#     _UNET_DEVICE = torch.device(device)
+#
+#     model = UNet(in_channels=1, out_classes=1, dimensions=1, padding=True)
+#     obj = torch.load(str(ckpt_path), map_location=_UNET_DEVICE)
+#
+#     if isinstance(obj, dict):
+#         if "state_dict" in obj:
+#             sd = obj[" state_dict"]
+#         elif "model" in obj:
+#             sd = obj["model"]
+#         else:
+#             sd = obj
+#     else:
+#         sd = obj
+#
+#     # DataParallel prefix 처리
+#     sd2 = {}
+#     for k, v in sd.items():
+#         kk = k
+#         if kk.startswith("module."):
+#             kk = kk[len("module."):]
+#         sd2[kk] = v
+#
+#     model.load_state_dict(sd2, strict=False)
+#     model.to(_UNET_DEVICE).eval()
+#     _UNET_MODEL = model
+#     return model
 
 
 def _unet_denoise_fullsignal(
     x: np.ndarray,
-    model: UNet,
+    model,  # UNet
     device: torch.device,
     win_len: int = 512,
     hop_len: int = 512,
@@ -176,6 +181,135 @@ def _unet_denoise_fullsignal(
     return out.astype(np.float32)
 
 
+# -------------------------
+# DeepFilter runner (Keras)
+# -------------------------
+_DEEPFILTER_MODEL = None
+
+def _load_deepfilter_model(weights_path: Path, signal_size: int = 512):
+    """
+    Load trained DeepFilter model
+    """
+    global _DEEPFILTER_MODEL
+    
+    # Create model
+    model = deepfilter.deep_filter_model_I_LANL_dilated(signal_size=signal_size)
+    
+    # Compile (needed for load_weights)
+    def combined_ssd_mad_loss(y_true, y_pred):
+        return tf.reduce_max(tf.square(y_true - y_pred), axis=-2) * 50 + \
+               tf.reduce_sum(tf.square(y_true - y_pred), axis=-2)
+    
+    model.compile(
+        loss=combined_ssd_mad_loss,
+        optimizer=keras.optimizers.Adam(learning_rate=0.001)
+    )
+    
+    # Load weights
+    print(f"Loading DeepFilter weights from: {weights_path}")
+    model.load_weights(str(weights_path))
+    
+    _DEEPFILTER_MODEL = model
+    return model
+
+
+def _deepfilter_denoise_fullsignal(
+    x: np.ndarray,
+    model,
+    win_len: int = 512,
+    hop_len: int = 256,
+    batch_size: int = 32,
+) -> np.ndarray:
+    """
+    Window-based inference with overlap-add reconstruction
+    
+    Args:
+        x: Input signal (N,)
+        model: DeepFilter model
+        win_len: Window size (512)
+        hop_len: Hop size for overlap (256 = 50% overlap)
+        batch_size: Batch size for inference
+    
+    Returns:
+        Denoised baseline wander (N,)
+    """
+    N = len(x)
+    
+    # Pad if needed
+    if N < win_len:
+        x_pad = np.pad(x, (0, win_len - N), mode='edge')
+    else:
+        x_pad = x
+    
+    # Create windows
+    windows = []
+    starts = []
+    for s in range(0, len(x_pad) - win_len + 1, hop_len):
+        windows.append(x_pad[s:s + win_len])
+        starts.append(s)
+    
+    if not windows:
+        return np.zeros_like(x)
+    
+    # Convert to Keras format: (N, win_len, 1)
+    windows = np.array(windows, dtype=np.float32)[:, :, None]
+    
+    # Run inference in batches
+    all_preds = []
+    for i in range(0, len(windows), batch_size):
+        batch = windows[i:i + batch_size]
+        pred = model.predict(batch, verbose=0)  # (B, win_len, 1)
+        all_preds.append(pred)
+    
+    all_preds = np.concatenate(all_preds, axis=0)  # (N_windows, win_len, 1)
+    
+    # Overlap-add reconstruction
+    out_sum = np.zeros(len(x_pad), dtype=np.float32)
+    out_cnt = np.zeros(len(x_pad), dtype=np.float32)
+    
+    for pred, s in zip(all_preds, starts):
+        out_sum[s:s + win_len] += pred[:, 0]  # Remove channel dim
+        out_cnt[s:s + win_len] += 1.0
+    
+    out = out_sum / np.maximum(out_cnt, 1.0)
+    
+    # Crop to original length
+    out = out[:N]
+    
+    return out.astype(np.float32)
+
+
+def run_method_deepfilter(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
+    """
+    DeepFilter: Deep learning baseline wander removal
+    - Uses window-based inference (512 samples, 50% overlap)
+    - Trained on MITDB + BW noise
+    """
+    if ARGS.deepfilter_weights is None:
+        raise ValueError("DeepFilter method selected but --deepfilter_weights is not provided.")
+    
+    global _DEEPFILTER_MODEL
+    if _DEEPFILTER_MODEL is None:
+        _load_deepfilter_model(
+            Path(ARGS.deepfilter_weights),
+            signal_size=ARGS.deepfilter_win_len
+        )
+    
+    # Predict clean signal (model output is now considered the clean ECG)
+    # Predict Clean ECG directly using overlap-add
+    y_out = _deepfilter_denoise_fullsignal(
+        x_in,
+        model=_DEEPFILTER_MODEL,
+        win_len=ARGS.deepfilter_win_len,
+        hop_len=ARGS.deepfilter_hop_len,
+        batch_size=ARGS.deepfilter_batch,
+    )
+    
+    print(f"[DEBUG DeepFilter] Output range: [{y_out.min():.4f}, {y_out.max():.4f}]")
+    
+    return y_out.astype(np.float32)
+
+
 # def run_method_unet(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     """
     Universal UNet:
@@ -205,6 +339,7 @@ def _unet_denoise_fullsignal(
 def build_method_registry() -> Dict[str, RunnerFn]:
     return {
         "proposed": run_method_proposed,
+        "deepfilter": run_method_deepfilter,
         # "dae": run_method_dae,  # ARCHIVED
         # "unet": run_method_unet,  # ARCHIVED (general-purpose model)
     }
@@ -243,6 +378,14 @@ def parse_args():
     ap.add_argument("--unet_hop_len", type=int, default=512, help="UNet inference hop length (overlap if < win_len)")
     ap.add_argument("--unet_batch", type=int, default=64, help="UNet inference batch size")
     ap.add_argument("--unet_normalize", type=str, default="minmax_by_noisy", choices=["minmax_by_noisy", "none"])
+    
+    # DeepFilter options
+    ap.add_argument("--deepfilter_weights", type=str, 
+                    default=str(ROOT / "outputs" / "DeepFilter" / "DeepFilter_LANLD_best.weights.h5"),
+                    help="path to trained DeepFilter weights (.weights.h5)")
+    ap.add_argument("--deepfilter_win_len", type=int, default=512, help="DeepFilter window length")
+    ap.add_argument("--deepfilter_hop_len", type=int, default=256, help="DeepFilter hop length (50%% overlap)")
+    ap.add_argument("--deepfilter_batch", type=int, default=32, help="DeepFilter inference batch size")
 
 
     return ap.parse_args()

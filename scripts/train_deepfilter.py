@@ -125,6 +125,8 @@ def load_and_resample_noise_segment(
     return nz.astype(np.float32, copy=False)
 
 
+
+
 def build_dataset_from_records(
     records: List[int],
     mitdb_dir: Path,
@@ -132,20 +134,15 @@ def build_dataset_from_records(
     noise_record: str,
     start_sample: int,
     duration_sec: int,
-    fs_target: int,
-    target_snr: float,
+    fs_target: float,
+    target_snrs: List[float] = [0, 5, 10, 15],  # Multiple SNRs
     signal_size: int = 512,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Build DeepFilter dataset from MITDB records
     
-    Uses 512-sample windows with 50% overlap (following original paper)
+    print(f"Building dataset from {len(records)} records with SNRs={target_snrs}...")
     
-    Returns:
-        X: (N, signal_size, 1) - noisy ECG windows
-        y: (N, signal_size, 1) - baseline wander (target to predict)
-    """
-    all_X, all_y = [], []
+    all_X = []
+    all_y = []
     
     for rec in records:
         clean = load_and_resample_mitdb_segment(
@@ -170,38 +167,46 @@ def build_dataset_from_records(
             print(f"[Skip] record {rec}: empty noise segment")
             continue
         
-        # Mix using noise.py
-        noisy, ref, actual_snr = noise_mixer.add_baseline_wander_snr(clean, bw, float(target_snr))
-        
-        # DeepFilter: predict baseline wander from noisy signal
-        # X: noisy ECG, y: baseline wander (bw component)
-        # Extract bw from noisy signal: bw ≈ noisy - ref
-        N = min(len(noisy), len(ref))
-        bw_extracted = (noisy[:N] - ref[:N]).astype(np.float32)
-        
-        # Segment into signal_size windows with 50% overlap
-        hop_len = signal_size // 2
-        n_windows = 0
-        
-        for start in range(0, N - signal_size + 1, hop_len):
-            x_seg = noisy[start:start + signal_size]
-            y_seg = bw_extracted[start:start + signal_size]
+        # Loop over multiple SNRs for Data Augmentation
+        for target_snr in target_snrs:
+            # Mix using noise.py
+            noisy, ref, actual_snr = noise_mixer.add_baseline_wander_snr(clean, bw, float(target_snr))
             
-            # Keras format: (signal_size, 1)
-            all_X.append(x_seg[:, None])
-            all_y.append(y_seg[:, None])
-            n_windows += 1
-        
-        print(f"[Rec {rec}] snr={target_snr}dB | windows={n_windows} | actual_snr={actual_snr:.2f}dB")
-    
+            # DeepFilter: predict Clean ECG directly
+            # X: noisy ECG, y: Clean ECG (MITDB)
+            # This solves scaling issues naturally as Clean ECG has large amplitude
+            N = min(len(noisy), len(ref))
+            clean_ref = ref[:N].astype(np.float32)
+            
+            # Segment into signal_size windows with 50% overlap
+            hop_len = signal_size // 2
+            n_windows = 0
+            
+            for start in range(0, N - signal_size + 1, hop_len):
+                x_seg = noisy[start:start + signal_size]
+                y_seg = clean_ref[start:start + signal_size]
+                
+                # Keras format: (signal_size, 1)
+                # Fixed Scaling roughly to [-1, 1] range (assuming max amplitude ~4mV)
+                # This prevents gradient explosions without destroying DC information
+                all_X.append(x_seg[:, None] / 4.0)
+                all_y.append(y_seg[:, None] / 4.0)
+                n_windows += 1
+            
+            # print(f"[Rec {rec}] snr={target_snr}dB | windows={n_windows}")
+
     if not all_X:
         return np.zeros((0, signal_size, 1), dtype=np.float32), \
                np.zeros((0, signal_size, 1), dtype=np.float32)
     
-    X = np.stack(all_X, axis=0).astype(np.float32)
-    y = np.stack(all_y, axis=0).astype(np.float32)
-    return X, y
-
+    X_arr = np.array(all_X, dtype=np.float32)
+    y_arr = np.array(all_y, dtype=np.float32)
+    
+    # Shuffle
+    indices = np.arange(len(X_arr))
+    np.random.shuffle(indices)
+    
+    return X_arr[indices], y_arr[indices]
 
 # ============================================================================
 # Training Pipeline
@@ -236,7 +241,7 @@ def train_deepfilter(args):
     
     signal_size = 512  # Fixed window size (DeepFilter paper)
     
-    print("[Data] Building train dataset...")
+    print("[Data] Building train dataset (Augmented SNRs: 0, 5, 10, 15)...")
     X_train, y_train = build_dataset_from_records(
         records=train_records,
         mitdb_dir=mitdb_dir,
@@ -245,12 +250,12 @@ def train_deepfilter(args):
         start_sample=args.start_sample,
         duration_sec=args.duration_sec,
         fs_target=args.fs,
-        target_snr=args.target_snr,
+        target_snrs=[0, 5, 10, 15],  # Augmentation
         signal_size=signal_size,
     )
     print(f"[Train] X={X_train.shape} | y={y_train.shape}")
     
-    print("[Data] Building val dataset...")
+    print("[Data] Building val dataset (Augmented SNRs: 0, 5, 10, 15)...")
     X_val, y_val = build_dataset_from_records(
         records=val_records,
         mitdb_dir=mitdb_dir,
@@ -259,7 +264,7 @@ def train_deepfilter(args):
         start_sample=args.start_sample,
         duration_sec=args.duration_sec,
         fs_target=args.fs,
-        target_snr=args.target_snr,
+        target_snrs=[0, 5, 10, 15],  # Augmentation
         signal_size=signal_size,
     )
     print(f"[Val] X={X_val.shape} | y={y_val.shape}")
@@ -291,14 +296,9 @@ def train_deepfilter(args):
     # ==================
     
     model.compile(
-        loss=combined_ssd_mad_loss,
+        loss='mse',
         optimizer=keras.optimizers.Adam(learning_rate=args.lr),
-        metrics=[
-            losses.mean_squared_error,
-            losses.mean_absolute_error,
-            ssd_loss,
-            mad_loss
-        ]
+        metrics=['mae', 'mse']
     )
     
     # ==================
