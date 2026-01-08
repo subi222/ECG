@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import numpy as np
+import tensorflow as tf
 import keras
 from keras import backend as K
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, EarlyStopping, TensorBoard
@@ -39,7 +40,7 @@ from models.model_DeepFilter import deepfilter
 
 def ssd_loss(y_true, y_pred):
     """Sum of Squared Distance"""
-    return K.sum(K.square(y_pred - y_true), axis=-2)
+    return tf.reduce_sum(tf.square(y_pred - y_true), axis=-2)
 
 
 def combined_ssd_mad_loss(y_true, y_pred):
@@ -48,13 +49,13 @@ def combined_ssd_mad_loss(y_true, y_pred):
     
     Loss = SSD + 50 * MAD
     """
-    return K.max(K.square(y_true - y_pred), axis=-2) * 50 + \
-           K.sum(K.square(y_true - y_pred), axis=-2)
+    return tf.reduce_max(tf.square(y_true - y_pred), axis=-2) * 50 + \
+           tf.reduce_sum(tf.square(y_true - y_pred), axis=-2)
 
 
 def mad_loss(y_true, y_pred):
     """Maximum Absolute Distance"""
-    return K.max(K.square(y_pred - y_true), axis=-2)
+    return tf.reduce_max(tf.square(y_pred - y_true), axis=-2)
 
 
 # ============================================================================
