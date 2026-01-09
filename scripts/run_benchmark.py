@@ -25,6 +25,12 @@ import keras
 import tensorflow as tf
 from models.model_DeepFilter import deepfilter
 
+# FCN+DAE Model (Keras)
+try:
+    from models.model_FCN_DAE import model_FCN_DAE
+except ImportError:
+    model_FCN_DAE = None  # Will be built dynamically if needed
+
 
 # -------------------------
 # Proposed runner (v37)
@@ -185,6 +191,7 @@ def _unet_denoise_fullsignal(
 # DeepFilter runner (Keras)
 # -------------------------
 _DEEPFILTER_MODEL = None
+_FCNDAE_MODEL = None
 
 def _load_deepfilter_model(weights_path: Path, signal_size: int = 512):
     """
@@ -310,6 +317,171 @@ def run_method_deepfilter(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     return y_out.astype(np.float32)
 
 
+# -------------------------
+# FCN+DAE runner (Keras)
+# -------------------------
+
+def _load_fcndae_model(weights_path: Path, signal_size: int = 512):
+    """
+    Load trained FCN+DAE model
+    """
+    global _FCNDAE_MODEL
+    
+    # Build model (same architecture as train_FCN_DAE.py)
+    from keras.models import Model
+    from keras.layers import Input, Conv1D, Conv1DTranspose, BatchNormalization
+    
+    input_shape = (signal_size, 1)
+    input_layer = Input(shape=input_shape)
+
+    # --- Encoder ---
+    x = Conv1D(filters=40, kernel_size=16, strides=2, padding='same', activation='elu')(input_layer)
+    x = BatchNormalization()(x)
+    
+    x = Conv1D(filters=20, kernel_size=16, strides=2, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+    
+    x = Conv1D(filters=20, kernel_size=16, strides=2, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+    
+    x = Conv1D(filters=20, kernel_size=16, strides=2, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+    
+    x = Conv1D(filters=40, kernel_size=16, strides=2, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+    
+    x = Conv1D(filters=1, kernel_size=16, strides=1, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+
+    # --- Decoder ---
+    x = Conv1DTranspose(filters=1, kernel_size=16, strides=1, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+    
+    x = Conv1DTranspose(filters=40, kernel_size=16, strides=2, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+    
+    x = Conv1DTranspose(filters=20, kernel_size=16, strides=2, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+    
+    x = Conv1DTranspose(filters=20, kernel_size=16, strides=2, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+    
+    x = Conv1DTranspose(filters=20, kernel_size=16, strides=2, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+    
+    x = Conv1DTranspose(filters=40, kernel_size=16, strides=2, padding='same', activation='elu')(x)
+    x = BatchNormalization()(x)
+
+    # Output Layer (Linear Activation)
+    predictions = Conv1DTranspose(filters=1, kernel_size=16, strides=1, padding='same', activation='linear')(x)
+
+    model = Model(inputs=[input_layer], outputs=predictions)
+    
+    # Compile (needed for load_weights)
+    model.compile(loss='mse', optimizer=keras.optimizers.Adam(learning_rate=0.001), metrics=['mae', 'mse'])
+    
+    # Load weights
+    print(f"Loading FCN+DAE weights from: {weights_path}")
+    model.load_weights(str(weights_path))
+    
+    _FCNDAE_MODEL = model
+    return model
+
+
+def _fcndae_denoise_fullsignal(
+    x: np.ndarray,
+    model,
+    win_len: int = 512,
+    hop_len: int = 256,
+    batch_size: int = 32,
+) -> np.ndarray:
+    """
+    Window-based inference with overlap-add reconstruction
+    Same as DeepFilter inference logic
+    """
+    N = len(x)
+    
+    # Pad if needed
+    if N < win_len:
+        x_pad = np.pad(x, (0, win_len - N), mode='edge')
+    else:
+        x_pad = x
+    
+    # Create windows
+    windows = []
+    starts = []
+    for s in range(0, len(x_pad) - win_len + 1, hop_len):
+        windows.append(x_pad[s:s + win_len])
+        starts.append(s)
+    
+    if not windows:
+        return np.zeros_like(x)
+    
+    # Convert to Keras format: (N, win_len, 1)
+    windows = np.array(windows, dtype=np.float32)[:, :, None]
+    
+    # Fixed Scaling (/4.0)
+    windows = windows / 4.0
+    
+    # Run inference in batches
+    all_preds = []
+    for i in range(0, len(windows), batch_size):
+        batch = windows[i:i + batch_size]
+        pred = model.predict(batch, verbose=0)  # (B, win_len, 1)
+        all_preds.append(pred)
+    
+    all_preds = np.concatenate(all_preds, axis=0)  # (N_windows, win_len, 1)
+    
+    # Inverse Scaling (*4.0)
+    all_preds = all_preds * 4.0
+    
+    # Overlap-add reconstruction
+    out_sum = np.zeros(len(x_pad), dtype=np.float32)
+    out_cnt = np.zeros(len(x_pad), dtype=np.float32)
+    
+    for pred, s in zip(all_preds, starts):
+        out_sum[s:s + win_len] += pred[:, 0]  # Remove channel dim
+        out_cnt[s:s + win_len] += 1.0
+    
+    out = out_sum / np.maximum(out_cnt, 1.0)
+    
+    # Crop to original length
+    out = out[:N]
+    
+    return out.astype(np.float32)
+
+
+def run_method_fcndae(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
+    """
+    FCN+DAE: Fully Convolutional Denoising Autoencoder
+    - Uses window-based inference (512 samples, 50% overlap)
+    - Trained on MITDB + BW noise (same as DeepFilter)
+    - Predicts Clean ECG directly
+    """
+    if ARGS.fcndae_weights is None:
+        raise ValueError("FCN+DAE method selected but --fcndae_weights is not provided.")
+    
+    global _FCNDAE_MODEL
+    if _FCNDAE_MODEL is None:
+        _load_fcndae_model(
+            Path(ARGS.fcndae_weights),
+            signal_size=ARGS.fcndae_win_len
+        )
+    
+    # Predict clean signal (same as DeepFilter)
+    y_out = _fcndae_denoise_fullsignal(
+        x_in,
+        model=_FCNDAE_MODEL,
+        win_len=ARGS.fcndae_win_len,
+        hop_len=ARGS.fcndae_hop_len,
+        batch_size=ARGS.fcndae_batch,
+    )
+    
+    print(f"[DEBUG FCN+DAE] Output range: [{y_out.min():.4f}, {y_out.max():.4f}]")
+    
+    return y_out.astype(np.float32)
+
+
 # def run_method_unet(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     """
     Universal UNet:
@@ -340,6 +512,7 @@ def build_method_registry() -> Dict[str, RunnerFn]:
     return {
         "proposed": run_method_proposed,
         "deepfilter": run_method_deepfilter,
+        "fcndae": run_method_fcndae,
         # "dae": run_method_dae,  # ARCHIVED
         # "unet": run_method_unet,  # ARCHIVED (general-purpose model)
     }
