@@ -5,6 +5,7 @@ from keras.layers import Dense, Conv1D, Flatten, Dropout, BatchNormalization,\
 
 import keras.backend as K
 
+
 def Conv1DTranspose(input_tensor, filters, kernel_size, strides=2, activation='relu', padding='same'):
     """
         https://stackoverflow.com/a/45788699
