@@ -314,6 +314,9 @@ def run_method_deepfilter(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     
     print(f"[DEBUG DeepFilter] Output range: [{y_out.min():.4f}, {y_out.max():.4f}]")
     
+    # Align to y=0 (remove DC offset like v37 does)
+    y_out = y_out - np.median(y_out)
+    
     return y_out.astype(np.float32)
 
 
@@ -479,6 +482,9 @@ def run_method_fcndae(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     
     print(f"[DEBUG FCN+DAE] Output range: [{y_out.min():.4f}, {y_out.max():.4f}]")
     
+    # Align to y=0 (remove DC offset like v37 does)
+    y_out = y_out - np.median(y_out)
+    
     return y_out.astype(np.float32)
 
 
@@ -554,11 +560,19 @@ def parse_args():
     
     # DeepFilter options
     ap.add_argument("--deepfilter_weights", type=str, 
-                    default=str(ROOT / "outputs" / "DeepFilter" / "DeepFilter_LANLD_best.weights.h5"),
+                    default=str(ROOT / "outputs" / "train_DeepFilter" / "DeepFilter_LANLD_best.weights.h5"),
                     help="path to trained DeepFilter weights (.weights.h5)")
     ap.add_argument("--deepfilter_win_len", type=int, default=512, help="DeepFilter window length")
     ap.add_argument("--deepfilter_hop_len", type=int, default=256, help="DeepFilter hop length (50%% overlap)")
     ap.add_argument("--deepfilter_batch", type=int, default=32, help="DeepFilter inference batch size")
+    
+    # FCN+DAE options
+    ap.add_argument("--fcndae_weights", type=str,
+                    default=str(ROOT / "outputs" / "train_FCN_DAE" / "FCN_DAE_best.weights.h5"),
+                    help="path to trained FCN+DAE weights (.weights.h5)")
+    ap.add_argument("--fcndae_win_len", type=int, default=512, help="FCN+DAE window length")
+    ap.add_argument("--fcndae_hop_len", type=int, default=256, help="FCN+DAE hop length (50%% overlap)")
+    ap.add_argument("--fcndae_batch", type=int, default=32, help="FCN+DAE inference batch size")
 
 
     return ap.parse_args()
