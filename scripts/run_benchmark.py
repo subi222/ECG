@@ -192,6 +192,7 @@ def _unet_denoise_fullsignal(
 # -------------------------
 _DEEPFILTER_MODEL = None
 _FCNDAE_MODEL = None
+_DRNN_MODEL = None
 
 def _load_deepfilter_model(weights_path: Path, signal_size: int = 512):
     """
@@ -511,6 +512,134 @@ def run_method_fcndae(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
         normalize=ARGS.unet_normalize,
     )
 
+
+# -------------------------
+# DRNN runner (Keras)
+# -------------------------
+
+def _load_drnn_model(weights_path: Path, signal_size: int = 512):
+    """
+    Load trained DRNN model (Antczak, 2018)
+    """
+    global _DRNN_MODEL
+    
+    from keras.models import Sequential
+    from keras.layers import Dense, LSTM
+    
+    # Build model (same architecture as train_DRNN.py)
+    model = Sequential()
+    model.add(LSTM(64, input_shape=(signal_size, 1), return_sequences=True))
+    model.add(Dense(64, activation='relu'))
+    model.add(Dense(64, activation='relu'))
+    model.add(Dense(1, activation='linear'))
+    
+    # Compile (needed for load_weights)
+    model.compile(loss='mse', optimizer=keras.optimizers.Adam(learning_rate=0.001), metrics=['mae', 'mse'])
+    
+    # Load weights
+    print(f"Loading DRNN weights from: {weights_path}")
+    model.load_weights(str(weights_path))
+    
+    _DRNN_MODEL = model
+    return model
+
+
+def _drnn_denoise_fullsignal(
+    x: np.ndarray,
+    model,
+    win_len: int = 512,
+    hop_len: int = 256,
+    batch_size: int = 32,
+) -> np.ndarray:
+    """
+    Window-based inference with overlap-add reconstruction
+    Same as DeepFilter/FCN+DAE inference logic
+    """
+    N = len(x)
+    
+    # Pad if needed
+    if N < win_len:
+        x_pad = np.pad(x, (0, win_len - N), mode='edge')
+    else:
+        x_pad = x
+    
+    # Create windows
+    windows = []
+    starts = []
+    for s in range(0, len(x_pad) - win_len + 1, hop_len):
+        windows.append(x_pad[s:s + win_len])
+        starts.append(s)
+    
+    if not windows:
+        return np.zeros_like(x)
+    
+    # Convert to Keras format: (N, win_len, 1)
+    windows = np.array(windows, dtype=np.float32)[:, :, None]
+    
+    # Fixed Scaling (/4.0)
+    windows = windows / 4.0
+    
+    # Run inference in batches
+    all_preds = []
+    for i in range(0, len(windows), batch_size):
+        batch = windows[i:i + batch_size]
+        pred = model.predict(batch, verbose=0)  # (B, win_len, 1)
+        all_preds.append(pred)
+    
+    all_preds = np.concatenate(all_preds, axis=0)  # (N_windows, win_len, 1)
+    
+    # Inverse Scaling (*4.0)
+    all_preds = all_preds * 4.0
+    
+    # Overlap-add reconstruction
+    out_sum = np.zeros(len(x_pad), dtype=np.float32)
+    out_cnt = np.zeros(len(x_pad), dtype=np.float32)
+    
+    for pred, s in zip(all_preds, starts):
+        out_sum[s:s + win_len] += pred[:, 0]  # Remove channel dim
+        out_cnt[s:s + win_len] += 1.0
+    
+    out = out_sum / np.maximum(out_cnt, 1.0)
+    
+    # Crop to original length
+    out = out[:N]
+    
+    return out.astype(np.float32)
+
+
+def run_method_drnn(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
+    """
+    DRNN: Deep Recurrent Neural Network (Antczak, 2018)
+    - Uses LSTM + Dense layers
+    - Window-based inference (512 samples, 50% overlap)
+    - Predicts Clean ECG directly
+    """
+    if ARGS.drnn_weights is None:
+        raise ValueError("DRNN method selected but --drnn_weights is not provided.")
+    
+    global _DRNN_MODEL
+    if _DRNN_MODEL is None:
+        _load_drnn_model(
+            Path(ARGS.drnn_weights),
+            signal_size=ARGS.drnn_win_len
+        )
+    
+    # Predict clean signal
+    y_out = _drnn_denoise_fullsignal(
+        x_in,
+        model=_DRNN_MODEL,
+        win_len=ARGS.drnn_win_len,
+        hop_len=ARGS.drnn_hop_len,
+        batch_size=ARGS.drnn_batch,
+    )
+    
+    print(f"[DEBUG DRNN] Output range: [{y_out.min():.4f}, {y_out.max():.4f}]")
+    
+    # Align to y=0 (remove DC offset like v37 does)
+    y_out = y_out - np.median(y_out)
+    
+    return y_out.astype(np.float32)
+
 # -------------------------
 # Registry
 # -------------------------
@@ -519,6 +648,7 @@ def build_method_registry() -> Dict[str, RunnerFn]:
         "proposed": run_method_proposed,
         "deepfilter": run_method_deepfilter,
         "fcndae": run_method_fcndae,
+        "drnn": run_method_drnn,
         # "dae": run_method_dae,  # ARCHIVED
         # "unet": run_method_unet,  # ARCHIVED (general-purpose model)
     }
@@ -573,6 +703,14 @@ def parse_args():
     ap.add_argument("--fcndae_win_len", type=int, default=512, help="FCN+DAE window length")
     ap.add_argument("--fcndae_hop_len", type=int, default=256, help="FCN+DAE hop length (50%% overlap)")
     ap.add_argument("--fcndae_batch", type=int, default=32, help="FCN+DAE inference batch size")
+    
+    # DRNN options
+    ap.add_argument("--drnn_weights", type=str,
+                    default=str(ROOT / "outputs" / "train_DRNN" / "DRNN_best.weights.h5"),
+                    help="path to trained DRNN weights (.weights.h5)")
+    ap.add_argument("--drnn_win_len", type=int, default=512, help="DRNN window length")
+    ap.add_argument("--drnn_hop_len", type=int, default=256, help="DRNN hop length (50%% overlap)")
+    ap.add_argument("--drnn_batch", type=int, default=32, help="DRNN inference batch size")
 
 
     return ap.parse_args()
