@@ -26,14 +26,16 @@ from common import utils
 DETAIL_HEADER = [
     "method", "rec_id", "noise_rec", "snr_target_db",
     "snr_in_db", "snr_out_db", "snr_improve_db",
-    "rmse", "prd_percent",
+    "rmse", "prd_percent", "ssim",
     "N"
 ]
 
 SUMMARY_HEADER = [
     "method", "noise_rec", "snr_target_db", "count",
     "snr_out_mean", "snr_out_std",
-    "rmse_mean", "rmse_std"
+    "rmse_mean", "rmse_std",
+    "prd_mean", "prd_std",
+    "ssim_mean", "ssim_std"
 ]
 
 
@@ -305,18 +307,19 @@ def run_benchmark(
                 snr_out = float(metrics.calculate_snr_db(ref_eval, out_eval, remove_mean=True))
                 rmse = float(metrics.calculate_rmse(ref_eval, out_eval))
                 prd = float(metrics.calculate_prd(ref_eval, out_eval, remove_mean=True))
+                ssim = float(metrics.calculate_ssim(ref_eval, out_eval, remove_mean=True))
                 snr_improve = float(snr_out - float(snr_in))
 
                 detail_rows.append([
                     method, rec_id, args.noise_rec, float(snr_tgt),
                     float(snr_in), snr_out, snr_improve,
-                    rmse, prd,
+                    rmse, prd, ssim,
                     int(N)
                 ])
                 print(
                     f"[{method}] rec={rec_id} snr={snr_tgt}dB "
                     f"in={snr_in:.2f} out={snr_out:.2f} imp={snr_improve:.2f} "
-                    f"rmse={rmse:.6f} prd={prd:.2f}%"
+                    f"rmse={rmse:.6f} prd={prd:.2f}% ssim={ssim:.4f}"
                 )
 
                 # ✅ 모든 test rec의 0dB plot 저장
@@ -358,11 +361,15 @@ def run_benchmark(
 
         snr_out_mean, snr_out_std = _mean_std([float(r[idx["snr_out_db"]]) for r in rows_g])
         rmse_mean, rmse_std = _mean_std([float(r[idx["rmse"]]) for r in rows_g])
+        prd_mean, prd_std = _mean_std([float(r[idx["prd_percent"]]) for r in rows_g])
+        ssim_mean, ssim_std = _mean_std([float(r[idx["ssim"]]) for r in rows_g])
 
         summary_rows.append([
             method, noise_rec, float(snr_tgt), count,
             snr_out_mean, snr_out_std,
-            rmse_mean, rmse_std
+            rmse_mean, rmse_std,
+            prd_mean, prd_std,
+            ssim_mean, ssim_std
         ])
 
     summary_csv = csv_dir / "results_summary.csv"

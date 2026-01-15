@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torchsummary import summary
 from math import log as ln
 
-import leaf_audio_pytorch.frontend as frontend
+# import leaf_audio_pytorch.frontend as frontend  # Not used, removed
 
 class Conv1d(nn.Conv1d):
     def __init__(self, *args, **kwargs):

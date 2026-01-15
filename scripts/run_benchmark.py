@@ -640,6 +640,153 @@ def run_method_drnn(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     
     return y_out.astype(np.float32)
 
+
+# -------------------------
+# DeScoD runner (PyTorch - DDPM based)
+# -------------------------
+_DESCOD_MODEL = None
+_DESCOD_DEVICE = None
+
+def _load_descod_model(weights_path: Path, feats: int = 64, device: str = "cuda"):
+    """
+    Load trained DeScoD model (DDPM + ConditionalModel)
+    """
+    global _DESCOD_MODEL, _DESCOD_DEVICE
+    
+    from models.model_DeScoD.small_DeScoD import ConditionalModel
+    from models.model_DeScoD.main_DeScoD import DDPM
+    
+    _DESCOD_DEVICE = torch.device(device if torch.cuda.is_available() else "cpu")
+    
+    # Default DDPM config
+    config = {
+        "train": {"feats": feats},
+        "diffusion": {
+            "num_steps": 50,
+            "schedule": "linear",
+            "beta_start": 0.0001,
+            "beta_end": 0.02,
+        }
+    }
+    
+    # Build model
+    base_model = ConditionalModel(feats=feats).to(_DESCOD_DEVICE)
+    model = DDPM(base_model, config, _DESCOD_DEVICE).to(_DESCOD_DEVICE)
+    
+    # Load weights
+    print(f"Loading DeScoD weights from: {weights_path}")
+    model.load_state_dict(torch.load(str(weights_path), map_location=_DESCOD_DEVICE))
+    model.eval()
+    
+    _DESCOD_MODEL = model
+    return model
+
+
+def _descod_denoise_fullsignal(
+    x: np.ndarray,
+    model,
+    device: torch.device,
+    win_len: int = 512,
+    hop_len: int = 256,
+    batch_size: int = 16,
+) -> np.ndarray:
+    """
+    Window-based DDPM inference with overlap-add reconstruction.
+    
+    DeScoD uses noisy signal as 'condition' and pure noise as starting point,
+    then iteratively denoises to get clean signal.
+    """
+    N = len(x)
+    
+    # Pad if needed
+    if N < win_len:
+        x_pad = np.pad(x, (0, win_len - N), mode='edge')
+    else:
+        x_pad = x
+    
+    # Create windows
+    windows = []
+    starts = []
+    for s in range(0, len(x_pad) - win_len + 1, hop_len):
+        windows.append(x_pad[s:s + win_len])
+        starts.append(s)
+    
+    if not windows:
+        return np.zeros_like(x)
+    
+    # Convert to PyTorch format: (N, 1, win_len) and scale
+    windows = np.array(windows, dtype=np.float32)[:, None, :] / 4.0
+    
+    # Run inference in batches
+    all_preds = []
+    model.eval()
+    
+    with torch.no_grad():
+        for i in range(0, len(windows), batch_size):
+            batch = torch.from_numpy(windows[i:i + batch_size]).to(device)
+            
+            # DDPM denoising: noisy signal is the condition
+            # model.denoising(condition) -> returns clean signal estimate
+            pred = model.denoising(batch)  # (B, 1, L)
+            all_preds.append(pred.cpu().numpy())
+    
+    all_preds = np.concatenate(all_preds, axis=0)  # (N_windows, 1, win_len)
+    
+    # Inverse scaling (*4.0)
+    all_preds = all_preds * 4.0
+    
+    # Overlap-add reconstruction
+    out_sum = np.zeros(len(x_pad), dtype=np.float32)
+    out_cnt = np.zeros(len(x_pad), dtype=np.float32)
+    
+    for pred, s in zip(all_preds, starts):
+        out_sum[s:s + win_len] += pred[0, :]  # Remove channel dim
+        out_cnt[s:s + win_len] += 1.0
+    
+    out = out_sum / np.maximum(out_cnt, 1.0)
+    
+    # Crop to original length
+    out = out[:N]
+    
+    return out.astype(np.float32)
+
+
+def run_method_descod(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
+    """
+    DeScoD: Diffusion-based ECG Denoising
+    - Uses DDPM (Denoising Diffusion Probabilistic Model)
+    - Window-based inference (512 samples, 50% overlap)
+    - PyTorch-based model
+    """
+    if ARGS.descod_weights is None:
+        raise ValueError("DeScoD method selected but --descod_weights is not provided.")
+    
+    global _DESCOD_MODEL, _DESCOD_DEVICE
+    if _DESCOD_MODEL is None:
+        device = ctx.device or ARGS.device or "cuda"
+        _load_descod_model(
+            Path(ARGS.descod_weights),
+            feats=ARGS.descod_feats,
+            device=device,
+        )
+    
+    # DDPM denoising
+    y_out = _descod_denoise_fullsignal(
+        x_in,
+        model=_DESCOD_MODEL,
+        device=_DESCOD_DEVICE,
+        win_len=ARGS.descod_win_len,
+        hop_len=ARGS.descod_hop_len,
+        batch_size=ARGS.descod_batch,
+    )
+    
+    print(f"[DEBUG DeScoD] Output range: [{y_out.min():.4f}, {y_out.max():.4f}]")
+    
+    # Align to y=0 (remove DC offset like v37 does)
+    y_out = y_out - np.median(y_out)
+    
+    return y_out.astype(np.float32)
+
 # -------------------------
 # Registry
 # -------------------------
@@ -649,6 +796,7 @@ def build_method_registry() -> Dict[str, RunnerFn]:
         "deepfilter": run_method_deepfilter,
         "fcndae": run_method_fcndae,
         "drnn": run_method_drnn,
+        "descod": run_method_descod,
         # "dae": run_method_dae,  # ARCHIVED
         # "unet": run_method_unet,  # ARCHIVED (general-purpose model)
     }
@@ -711,7 +859,15 @@ def parse_args():
     ap.add_argument("--drnn_win_len", type=int, default=512, help="DRNN window length")
     ap.add_argument("--drnn_hop_len", type=int, default=256, help="DRNN hop length (50%% overlap)")
     ap.add_argument("--drnn_batch", type=int, default=32, help="DRNN inference batch size")
-
+    
+    # DeScoD options
+    ap.add_argument("--descod_weights", type=str,
+                    default=str(ROOT / "outputs" / "train_DeScoD" / "DeScoD_best.pth"),
+                    help="path to trained DeScoD weights (.pth)")
+    ap.add_argument("--descod_win_len", type=int, default=512, help="DeScoD window length")
+    ap.add_argument("--descod_hop_len", type=int, default=256, help="DeScoD hop length (50%% overlap)")
+    ap.add_argument("--descod_batch", type=int, default=16, help="DeScoD inference batch size")
+    ap.add_argument("--descod_feats", type=int, default=64, help="DeScoD feature dimension")
 
     return ap.parse_args()
 
