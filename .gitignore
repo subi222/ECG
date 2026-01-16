@@ -1,21 +1,28 @@
-
-# Valid VSCode project ignores
-.vscode/
-
-# Python cache
-__pycache__/
-*.pyc
-
-# Virtual Environment
+# Environment
 .venv/
 venv/
-env/
+ENV/
 
-# Outputs
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Data & Outputs (Exclude from Git)
 outputs/
-
-# Archive
-# archive/
-
-# Plots (User request)
+data/
 *.png
+*.csv
+*.pth
+*.weights.h5
+training_history.json
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Benchmark results
+test_img.png
+scripts/generate_plot_report.py

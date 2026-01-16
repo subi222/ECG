@@ -1,0 +1,11 @@
+train:
+  batch_size: 64
+  epochs: 500
+  lr: 0.0001
+  feats: 64
+
+diffusion:
+  num_steps: 100
+  schedule: 'linear'
+  beta_start: 0.0001
+  beta_end: 0.02

@@ -330,7 +330,7 @@ def train_descod(args):
         torch.FloatTensor(X_val),
     )
     
-    batch_size = cfg["train"].get("batch_size", 64)
+    batch_size = args.batch_size if args.batch_size else cfg["train"].get("batch_size", 64)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
@@ -353,8 +353,10 @@ def train_descod(args):
     # ==================
     
     lr = cfg["train"].get("lr", 1e-4)
-    epochs = cfg["train"].get("epochs", 100)
+    epochs = args.epochs if args.epochs else cfg["train"].get("epochs", 500)
+    batch_size = args.batch_size if args.batch_size else cfg["train"].get("batch_size", 64)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=epochs // 3, gamma=0.1)
     
     # Output directory
     out_dir = ROOT / args.out_dir
@@ -375,6 +377,7 @@ def train_descod(args):
     for epoch in range(1, epochs + 1):
         train_loss = train_epoch(model, train_loader, optimizer, device)
         val_loss = validate(model, val_loader, device)
+        scheduler.step()
         
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
@@ -432,6 +435,8 @@ def parse_args():
     # Training
     parser.add_argument('--device', type=str, default='cuda:0', help='Device')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--epochs', type=int, default=0, help='Override epochs (0 to use config)')
+    parser.add_argument('--batch_size', type=int, default=0, help='Override batch size (0 to use config)')
     
     # Output
     parser.add_argument('--out_dir', type=str, default='outputs/train_DeScoD',

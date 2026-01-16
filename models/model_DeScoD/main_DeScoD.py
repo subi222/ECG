@@ -30,7 +30,7 @@ class DDPM(nn.Module):
         self.device = device
         self.conditional = conditional
         
-        self.loss_func = nn.L1Loss(reduction='sum').to(device)
+        self.loss_func = nn.L1Loss(reduction='mean').to(device)
         
         config_diff = config["diffusion"]
         

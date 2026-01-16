@@ -34,8 +34,7 @@ SUMMARY_HEADER = [
     "method", "noise_rec", "snr_target_db", "count",
     "snr_out_mean", "snr_out_std",
     "rmse_mean", "rmse_std",
-    "prd_mean", "prd_std",
-    "ssim_mean", "ssim_std"
+    "prd_mean", "ssim_mean"
 ]
 
 
@@ -361,15 +360,14 @@ def run_benchmark(
 
         snr_out_mean, snr_out_std = _mean_std([float(r[idx["snr_out_db"]]) for r in rows_g])
         rmse_mean, rmse_std = _mean_std([float(r[idx["rmse"]]) for r in rows_g])
-        prd_mean, prd_std = _mean_std([float(r[idx["prd_percent"]]) for r in rows_g])
-        ssim_mean, ssim_std = _mean_std([float(r[idx["ssim"]]) for r in rows_g])
+        prd_mean, _ = _mean_std([float(r[idx["prd_percent"]]) for r in rows_g])
+        ssim_mean, _ = _mean_std([float(r[idx["ssim"]]) for r in rows_g])
 
         summary_rows.append([
             method, noise_rec, float(snr_tgt), count,
             snr_out_mean, snr_out_std,
             rmse_mean, rmse_std,
-            prd_mean, prd_std,
-            ssim_mean, ssim_std
+            prd_mean, ssim_mean
         ])
 
     summary_csv = csv_dir / "results_summary.csv"

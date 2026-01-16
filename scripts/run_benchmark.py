@@ -647,7 +647,7 @@ def run_method_drnn(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
 _DESCOD_MODEL = None
 _DESCOD_DEVICE = None
 
-def _load_descod_model(weights_path: Path, feats: int = 64, device: str = "cuda"):
+def _load_descod_model(weights_path: Path, feats: int = 64, steps: int = 100, device: str = "cuda"):
     """
     Load trained DeScoD model (DDPM + ConditionalModel)
     """
@@ -662,7 +662,7 @@ def _load_descod_model(weights_path: Path, feats: int = 64, device: str = "cuda"
     config = {
         "train": {"feats": feats},
         "diffusion": {
-            "num_steps": 50,
+            "num_steps": steps,
             "schedule": "linear",
             "beta_start": 0.0001,
             "beta_end": 0.02,
@@ -763,11 +763,11 @@ def run_method_descod(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     
     global _DESCOD_MODEL, _DESCOD_DEVICE
     if _DESCOD_MODEL is None:
-        device = ctx.device or ARGS.device or "cuda"
         _load_descod_model(
-            Path(ARGS.descod_weights),
+            weights_path=Path(ARGS.descod_weights),
             feats=ARGS.descod_feats,
-            device=device,
+            steps=ARGS.descod_steps,
+            device=ARGS.device
         )
     
     # DDPM denoising
@@ -868,6 +868,7 @@ def parse_args():
     ap.add_argument("--descod_hop_len", type=int, default=256, help="DeScoD hop length (50%% overlap)")
     ap.add_argument("--descod_batch", type=int, default=16, help="DeScoD inference batch size")
     ap.add_argument("--descod_feats", type=int, default=64, help="DeScoD feature dimension")
+    ap.add_argument("--descod_steps", type=int, default=100, help="DeScoD diffusion steps")
 
     return ap.parse_args()
 
