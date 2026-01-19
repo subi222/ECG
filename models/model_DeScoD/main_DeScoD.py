@@ -30,7 +30,13 @@ class DDPM(nn.Module):
         self.device = device
         self.conditional = conditional
         
-        self.loss_func = nn.L1Loss(reduction='mean').to(device)
+        # Loss function selection
+        loss_type = config["train"].get("loss_type", "l1").lower()
+        if loss_type == "mse":
+            self.loss_func = nn.MSELoss(reduction='mean').to(device)
+        else:
+            # Official DeScoD code uses 'sum' reduction for L1
+            self.loss_func = nn.L1Loss(reduction='sum').to(device)
         
         config_diff = config["diffusion"]
         

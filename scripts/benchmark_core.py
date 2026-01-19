@@ -25,16 +25,16 @@ from common import utils
 # -------------------------
 DETAIL_HEADER = [
     "method", "rec_id", "noise_rec", "snr_target_db",
-    "snr_in_db", "snr_out_db", "snr_improve_db",
-    "rmse", "prd_percent", "ssim",
-    "N"
+    "snr_in", "snr_out", "snr_improve",
+    "rmse", "prd", "prdn", "ssim", "gain",
+    "samples"
 ]
 
 SUMMARY_HEADER = [
     "method", "noise_rec", "snr_target_db", "count",
     "snr_out_mean", "snr_out_std",
     "rmse_mean", "rmse_std",
-    "prd_mean", "ssim_mean"
+    "prd_mean", "prdn_mean", "ssim_mean", "gain_mean"
 ]
 
 
@@ -107,8 +107,14 @@ def save_tripanel_plot(
     axes[2].grid(True, alpha=0.2)
     axes[2].legend(loc="upper right")
 
+    # Calculate consistent Y-limits based on reference signal (with 10% margin)
+    y_min, y_max = z_ref.min(), z_ref.max()
+    y_margin = (y_max - y_min) * 0.1
+    ylim = (y_min - y_margin, y_max + y_margin)
+
     for ax in axes:
         ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
 
     fig.tight_layout()
     fig.savefig(out_png, dpi=160)
@@ -306,19 +312,26 @@ def run_benchmark(
                 snr_out = float(metrics.calculate_snr_db(ref_eval, out_eval, remove_mean=True))
                 rmse = float(metrics.calculate_rmse(ref_eval, out_eval))
                 prd = float(metrics.calculate_prd(ref_eval, out_eval, remove_mean=True))
+                prdn = float(metrics.calculate_prd_normalized(ref_eval, out_eval, remove_mean=True))
                 ssim = float(metrics.calculate_ssim(ref_eval, out_eval, remove_mean=True))
                 snr_improve = float(snr_out - float(snr_in))
+
+                # Gain calculation (Scale factor: E[ref * out] / E[ref * ref])
+                ref0 = ref_eval - ref_eval.mean()
+                out0 = out_eval - out_eval.mean()
+                gain = float(np.dot(ref0, out0) / (np.dot(ref0, ref0) + 1e-12))
 
                 detail_rows.append([
                     method, rec_id, args.noise_rec, float(snr_tgt),
                     float(snr_in), snr_out, snr_improve,
-                    rmse, prd, ssim,
+                    rmse, prd, prdn, ssim, gain,
                     int(N)
                 ])
                 print(
                     f"[{method}] rec={rec_id} snr={snr_tgt}dB "
                     f"in={snr_in:.2f} out={snr_out:.2f} imp={snr_improve:.2f} "
-                    f"rmse={rmse:.6f} prd={prd:.2f}% ssim={ssim:.4f}"
+                    f"rmse={rmse:.6f} prd={prd:.2f}% prdn={prdn:.2f}% "
+                    f"ssim={ssim:.4f} gain={gain:.3f}"
                 )
 
                 # ✅ 모든 test rec의 0dB plot 저장
@@ -349,25 +362,27 @@ def run_benchmark(
     groups = sorted(set((r[idx["method"]], r[idx["noise_rec"]], r[idx["snr_target_db"]]) for r in detail_rows))
 
     summary_rows: List[List[Any]] = []
-    for method, noise_rec, snr_tgt in groups:
-        rows_g = [
+    for m, nr, s_tgt in groups:
+        group_rows = [
             r for r in detail_rows
-            if r[idx["method"]] == method
-            and r[idx["noise_rec"]] == noise_rec
-            and r[idx["snr_target_db"]] == snr_tgt
+            if r[idx["method"]] == m
+            and r[idx["noise_rec"]] == nr
+            and r[idx["snr_target_db"]] == s_tgt
         ]
-        count = len(rows_g)
 
-        snr_out_mean, snr_out_std = _mean_std([float(r[idx["snr_out_db"]]) for r in rows_g])
-        rmse_mean, rmse_std = _mean_std([float(r[idx["rmse"]]) for r in rows_g])
-        prd_mean, _ = _mean_std([float(r[idx["prd_percent"]]) for r in rows_g])
-        ssim_mean, _ = _mean_std([float(r[idx["ssim"]]) for r in rows_g])
+        snr_v = [r[idx["snr_out"]] for r in group_rows]
+        rmse_v = [r[idx["rmse"]] for r in group_rows]
+        prd_v = [r[idx["prd"]] for r in group_rows]
+        prdn_v = [r[idx["prdn"]] for r in group_rows]
+        ssim_v = [r[idx["ssim"]] for r in group_rows]
+        gain_v = [r[idx["gain"]] for r in group_rows]
 
         summary_rows.append([
-            method, noise_rec, float(snr_tgt), count,
-            snr_out_mean, snr_out_std,
-            rmse_mean, rmse_std,
-            prd_mean, ssim_mean
+            m, nr, s_tgt, len(group_rows),
+            np.mean(snr_v), np.std(snr_v),
+            np.mean(rmse_v), np.std(rmse_v),
+            np.mean(prd_v), np.mean(prdn_v),
+            np.mean(ssim_v), np.mean(gain_v)
         ])
 
     summary_csv = csv_dir / "results_summary.csv"

@@ -43,6 +43,7 @@ def run_method_proposed(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
         r_idx=ctx.r_idx,
         adaptive_denoise=True
     )
+    print(f"[DEBUG Proposed] Output range: [{y.min():.4f}, {y.max():.4f}]")
     return y.astype(np.float32)
 
 
@@ -184,6 +185,7 @@ def _unet_denoise_fullsignal(
 
     # 원래 길이로 자르기(짧은 입력 pad 케이스 포함)
     out = out[:N]
+    print(f"[DEBUG DRNN] Output range: [{out.min():.4f}, {out.max():.4f}]")
     return out.astype(np.float32)
 
 
@@ -262,6 +264,9 @@ def _deepfilter_denoise_fullsignal(
     # Convert to Keras format: (N, win_len, 1)
     windows = np.array(windows, dtype=np.float32)[:, :, None]
     
+    # Fixed Scaling (/4.0)
+    windows = windows / 4.0
+    
     # Run inference in batches
     all_preds = []
     for i in range(0, len(windows), batch_size):
@@ -270,6 +275,9 @@ def _deepfilter_denoise_fullsignal(
         all_preds.append(pred)
     
     all_preds = np.concatenate(all_preds, axis=0)  # (N_windows, win_len, 1)
+    
+    # Inverse Scaling (*4.0)
+    all_preds = all_preds * 4.0
     
     # Overlap-add reconstruction
     out_sum = np.zeros(len(x_pad), dtype=np.float32)

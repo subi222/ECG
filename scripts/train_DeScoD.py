@@ -183,7 +183,7 @@ def build_dataset_from_records(
 # Training Functions
 # ============================================================================
 
-def train_epoch(model, dataloader, optimizer, device):
+def train_epoch(model, dataloader, optimizer, device, ema=None):
     """Train for one epoch"""
     model.train()
     total_loss = 0.0
@@ -198,8 +198,15 @@ def train_epoch(model, dataloader, optimizer, device):
         # DDPM forward: (clean, noisy_condition)
         loss = model(clean, noisy)
         loss.backward()
+        
+        # Add gradient clipping to prevent divergence
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
         optimizer.step()
         
+        if ema is not None:
+            ema.update(model)
+            
         total_loss += loss.item()
     
     return total_loss / len(dataloader)
@@ -275,6 +282,9 @@ def train_descod(args):
         }
         print(f"[Config] Using default config")
     
+    if args.loss_type:
+        cfg["train"]["loss_type"] = args.loss_type
+        
     print(f"[Config] {cfg}")
     
     # Load splits
@@ -356,7 +366,22 @@ def train_descod(args):
     epochs = args.epochs if args.epochs else cfg["train"].get("epochs", 500)
     batch_size = args.batch_size if args.batch_size else cfg["train"].get("batch_size", 64)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=epochs // 3, gamma=0.1)
+    
+    # More relaxed scheduler for 100 epochs
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=max(1, epochs // 2), gamma=0.1)
+    
+    # EMA setup
+    use_ema = args.use_ema if args.use_ema != "" else cfg["train"].get("use_ema", False)
+    # Convert string flag to bool if needed
+    if isinstance(use_ema, str):
+        use_ema = use_ema.lower() == "true"
+        
+    ema_helper = None
+    if use_ema:
+        from models.model_DeScoD.main_DeScoD import EMA
+        ema_helper = EMA(mu=0.999)
+        ema_helper.register(model)
+        print("[EMA] Enabled")
     
     # Output directory
     out_dir = ROOT / args.out_dir
@@ -374,24 +399,47 @@ def train_descod(args):
     
     history = {"train_loss": [], "val_loss": []}
     
+    # Early stopping setup
+    patience = args.patience if args.patience else cfg["train"].get("patience", 10)
+    patience_counter = 0
+    
     for epoch in range(1, epochs + 1):
-        train_loss = train_epoch(model, train_loader, optimizer, device)
+        train_loss = train_epoch(model, train_loader, optimizer, device, ema=ema_helper)
         val_loss = validate(model, val_loader, device)
+        
         scheduler.step()
         
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
         
-        # Save best model
+        # Save best model and handle early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), best_model_path)
+            patience_counter = 0
+            
+            # Save best model
+            if ema_helper is not None:
+                # Apply EMA weights temporarily for saving
+                original_weights = {k: v.clone() for k, v in model.state_dict().items()}
+                ema_helper.ema(model)
+                torch.save(model.state_dict(), out_dir / "DeScoD_best.pth")
+                # Restore original weights for continued training
+                model.load_state_dict(original_weights)
+                print(f"  -> Best model saved (EMA weights)")
+            else:
+                torch.save(model.state_dict(), out_dir / "DeScoD_best.pth")
+                print(f"  -> Best model saved")
             marker = " *"
         else:
+            patience_counter += 1
             marker = ""
         
         if epoch % 10 == 0 or epoch == 1:
-            print(f"[Epoch {epoch:3d}/{epochs}] train_loss={train_loss:.4f} | val_loss={val_loss:.4f}{marker}")
+            print(f"[Epoch {epoch:3d}/{epochs}] train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | patience={patience_counter}/{patience}{marker}")
+            
+        if patience_counter >= patience:
+            print(f"\n[Early Stopping] No improvement for {patience} epochs. Stopping at epoch {epoch}.")
+            break
     
     # Save final model
     final_model_path = out_dir / "DeScoD_final.pth"
@@ -437,6 +485,9 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--epochs', type=int, default=0, help='Override epochs (0 to use config)')
     parser.add_argument('--batch_size', type=int, default=0, help='Override batch size (0 to use config)')
+    parser.add_argument('--patience', type=int, default=0, help='Override early stopping patience (0 to use config)')
+    parser.add_argument('--loss_type', type=str, default='', help='Override loss type (l1/mse)')
+    parser.add_argument('--use_ema', type=str, default='', help='Use EMA during training (true/false)')
     
     # Output
     parser.add_argument('--out_dir', type=str, default='outputs/train_DeScoD',

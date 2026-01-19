@@ -55,6 +55,31 @@ def calculate_prd(clean, processed, remove_mean=True):
     return float(100.0 * num / den)
 
 
+def calculate_prd_normalized(clean, processed, remove_mean=True):
+    """
+    PRDN (%): Optimized scaling implemented.
+    Finds the optimal gain factor G that minimizes ||clean - G*processed||.
+    This effectively ignores gain/amplitude differences.
+    """
+    clean = np.asarray(clean, dtype=np.float64)
+    proc = np.asarray(processed, dtype=np.float64)
+
+    if remove_mean:
+        clean = clean - clean.mean()
+        proc = proc - proc.mean()
+
+    # Optimal scaling factor G = dot(clean, proc) / dot(proc, proc)
+    num_g = np.dot(clean, proc)
+    den_g = np.dot(proc, proc) + EPS
+    g = num_g / den_g
+
+    # Scaled residual
+    res = clean - g * proc
+    num = np.linalg.norm(res)
+    den = np.linalg.norm(clean) + EPS
+    return float(100.0 * num / den)
+
+
 def calculate_ssim(clean, processed, remove_mean=True, window_size=11):
     """
     SSIM (Structural Similarity Index) for 1D ECG signals.

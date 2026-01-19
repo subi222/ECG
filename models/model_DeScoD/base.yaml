@@ -3,6 +3,8 @@ train:
   epochs: 500
   lr: 0.0001
   feats: 64
+  patience: 10
+  loss_type: "l1"
 
 diffusion:
   num_steps: 100
