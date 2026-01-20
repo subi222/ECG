@@ -266,6 +266,7 @@ def train_descod(args):
         print(f"[Config] Loaded from: {config_path}")
     else:
         # Default config
+        
         cfg = {
             "train": {
                 "batch_size": 64,
@@ -274,20 +275,21 @@ def train_descod(args):
                 "feats": 64,
             },
             "diffusion": {
-                "num_steps": 50,
+                "num_steps": 1000,
                 "schedule": "linear",
                 "beta_start": 0.0001,
                 "beta_end": 0.02,
             }
         }
         print(f"[Config] Using default config")
+        
     
     print(f"[Config] {cfg}")
     
     # Load splits
     train_records, val_records, test_records = load_splits(splits_path)
     print(f"\n[Split] train={len(train_records)} | val={len(val_records)} | test={len(test_records)}")
-    
+
     # ==================
     # Build Datasets
     # ==================
@@ -437,11 +439,17 @@ def train_descod(args):
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
     
+    # Save config alongside trained model
+    config_save_path = out_dir / "config.yaml"
+    with open(config_save_path, "w") as f:
+        yaml.dump(cfg, f)
+    
     print(f"\n{'='*60}")
     print(f"Training completed!")
     print(f"  Best model: {best_model_path}")
     print(f"  Final model: {final_model_path}")
     print(f"  History: {history_path}")
+    print(f"  Config: {config_save_path}")
     print(f"{'='*60}")
 
 

@@ -662,7 +662,7 @@ def _load_descod_model(weights_path: Path, feats: int = 64, device: str = "cuda"
     config = {
         "train": {"feats": feats},
         "diffusion": {
-            "num_steps": 100,
+            "num_steps": 1000,
             "schedule": "linear",
             "beta_start": 0.0001,
             "beta_end": 0.02,
@@ -683,7 +683,7 @@ def _load_descod_model(weights_path: Path, feats: int = 64, device: str = "cuda"
 
 
 def _descod_denoise_fullsignal(
-    x: np.ndarray,
+    x: np.ndarray,  # noisy signal
     model,
     device: torch.device,
     win_len: int = 512,
@@ -693,8 +693,10 @@ def _descod_denoise_fullsignal(
     """
     Window-based DDPM inference with overlap-add reconstruction.
     
-    DeScoD uses noisy signal as 'condition' and pure noise as starting point,
-    then iteratively denoises to get clean signal.
+    DeScoD는:
+    1. noisy signal을 condition으로 사용
+    2. random noise에서 시작
+    3. 점진적으로 clean signal로 복원
     """
     N = len(x)
     
@@ -725,8 +727,9 @@ def _descod_denoise_fullsignal(
         for i in range(0, len(windows), batch_size):
             batch = torch.from_numpy(windows[i:i + batch_size]).to(device)
             
-            # DDPM denoising: noisy signal is the condition
-            # model.denoising(condition) -> returns clean signal estimate
+            # ✅ 올바른 방법: denoising에 noisy signal 전달
+            # model.denoising(x_in)에서 x_in은 condition (noisy)
+            # 내부에서 random noise부터 시작해서 점진적으로 복원
             pred = model.denoising(batch)  # (B, 1, L)
             all_preds.append(pred.cpu().numpy())
     
@@ -749,6 +752,7 @@ def _descod_denoise_fullsignal(
     out = out[:N]
     
     return out.astype(np.float32)
+
 
 
 def run_method_descod(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
