@@ -160,9 +160,9 @@ def build_dataset_from_records(
                 y_seg = clean_ref[start:start + signal_size]
                 
                 # PyTorch format: (1, signal_size) - channel first
-                # Scale to roughly [-1, 1] range (assuming max amplitude ~4mV)
-                all_X.append(x_seg[None, :] / 4.0)
-                all_y.append(y_seg[None, :] / 4.0)
+                # No scaling (following original DeScoD implementation)
+                all_X.append(x_seg[None, :])
+                all_y.append(y_seg[None, :])
     
     if not all_X:
         return np.zeros((0, 1, signal_size), dtype=np.float32), \
@@ -275,7 +275,7 @@ def train_descod(args):
                 "feats": 64,
             },
             "diffusion": {
-                "num_steps": 1000,
+                "num_steps": 100,
                 "schedule": "linear",
                 "beta_start": 0.0001,
                 "beta_end": 0.02,

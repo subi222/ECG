@@ -655,22 +655,32 @@ def _load_descod_model(weights_path: Path, feats: int = 64, device: str = "cuda"
     
     from models.model_DeScoD.small_DeScoD import ConditionalModel
     from models.model_DeScoD.main_DeScoD import DDPM
+    import yaml
     
     _DESCOD_DEVICE = torch.device(device if torch.cuda.is_available() else "cpu")
     
-    # Default DDPM config
-    config = {
-        "train": {"feats": feats},
-        "diffusion": {
-            "num_steps": 1000,
-            "schedule": "linear",
-            "beta_start": 0.0001,
-            "beta_end": 0.02,
+    # ✅ Load config from training
+    config_path = weights_path.parent / "config.yaml"
+    if config_path.exists():
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        print(f"[DeScoD] Loaded config from: {config_path}")
+        print(f"[DeScoD] num_steps={config['diffusion']['num_steps']}")
+    else:
+        # Default DDPM config (should match training!)
+        print("[Warning] Config not found, using default (may not match training!)")
+        config = {
+            "train": {"feats": feats},
+            "diffusion": {
+                "num_steps": 100,  # ← 학습과 일치 (원본 DeScoD 기준)
+                "schedule": "linear",
+                "beta_start": 0.0001,
+                "beta_end": 0.02,
+            }
         }
-    }
     
     # Build model
-    base_model = ConditionalModel(feats=feats).to(_DESCOD_DEVICE)
+    base_model = ConditionalModel(feats=config["train"]["feats"]).to(_DESCOD_DEVICE)
     model = DDPM(base_model, config, _DESCOD_DEVICE).to(_DESCOD_DEVICE)
     
     # Load weights
@@ -774,15 +784,33 @@ def run_method_descod(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
             device=device,
         )
     
-    # DDPM denoising
-    y_out = _descod_denoise_fullsignal(
-        x_in,
-        model=_DESCOD_MODEL,
-        device=_DESCOD_DEVICE,
-        win_len=ARGS.descod_win_len,
-        hop_len=ARGS.descod_hop_len,
-        batch_size=ARGS.descod_batch,
-    )
+    # Multi-shot inference (following original DeScoD paper)
+    shots = ARGS.descod_shots if hasattr(ARGS, 'descod_shots') else 1
+    
+    if shots > 1:
+        print(f"[DeScoD] Using {shots}-shot inference (averaging {shots} runs)")
+        y_out = np.zeros_like(x_in)
+        for i in range(shots):
+            y_shot = _descod_denoise_fullsignal(
+                x_in,
+                model=_DESCOD_MODEL,
+                device=_DESCOD_DEVICE,
+                win_len=ARGS.descod_win_len,
+                hop_len=ARGS.descod_hop_len,
+                batch_size=ARGS.descod_batch,
+            )
+            y_out += y_shot
+        y_out /= shots  # Average
+    else:
+        # Single-shot (original behavior)
+        y_out = _descod_denoise_fullsignal(
+            x_in,
+            model=_DESCOD_MODEL,
+            device=_DESCOD_DEVICE,
+            win_len=ARGS.descod_win_len,
+            hop_len=ARGS.descod_hop_len,
+            batch_size=ARGS.descod_batch,
+        )
     
     print(f"[DEBUG DeScoD] Output range: [{y_out.min():.4f}, {y_out.max():.4f}]")
     
@@ -872,6 +900,7 @@ def parse_args():
     ap.add_argument("--descod_hop_len", type=int, default=256, help="DeScoD hop length (50%% overlap)")
     ap.add_argument("--descod_batch", type=int, default=16, help="DeScoD inference batch size")
     ap.add_argument("--descod_feats", type=int, default=64, help="DeScoD feature dimension")
+    ap.add_argument("--descod_shots", type=int, default=1, help="DeScoD multi-shot count (1=single, 5-10=smoother output)")
 
     return ap.parse_args()
 

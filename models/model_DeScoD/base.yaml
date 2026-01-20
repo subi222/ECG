@@ -6,7 +6,7 @@ train:
   patience: 10
 
 diffusion:
-  num_steps: 1000
+  num_steps: 100
   schedule: 'linear'
   beta_start: 0.0001
   beta_end: 0.02
