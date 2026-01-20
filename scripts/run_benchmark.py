@@ -43,7 +43,6 @@ def run_method_proposed(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
         r_idx=ctx.r_idx,
         adaptive_denoise=True
     )
-    print(f"[DEBUG Proposed] Output range: [{y.min():.4f}, {y.max():.4f}]")
     return y.astype(np.float32)
 
 
@@ -185,7 +184,6 @@ def _unet_denoise_fullsignal(
 
     # 원래 길이로 자르기(짧은 입력 pad 케이스 포함)
     out = out[:N]
-    print(f"[DEBUG DRNN] Output range: [{out.min():.4f}, {out.max():.4f}]")
     return out.astype(np.float32)
 
 
@@ -264,9 +262,6 @@ def _deepfilter_denoise_fullsignal(
     # Convert to Keras format: (N, win_len, 1)
     windows = np.array(windows, dtype=np.float32)[:, :, None]
     
-    # Fixed Scaling (/4.0)
-    windows = windows / 4.0
-    
     # Run inference in batches
     all_preds = []
     for i in range(0, len(windows), batch_size):
@@ -275,9 +270,6 @@ def _deepfilter_denoise_fullsignal(
         all_preds.append(pred)
     
     all_preds = np.concatenate(all_preds, axis=0)  # (N_windows, win_len, 1)
-    
-    # Inverse Scaling (*4.0)
-    all_preds = all_preds * 4.0
     
     # Overlap-add reconstruction
     out_sum = np.zeros(len(x_pad), dtype=np.float32)
@@ -655,7 +647,7 @@ def run_method_drnn(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
 _DESCOD_MODEL = None
 _DESCOD_DEVICE = None
 
-def _load_descod_model(weights_path: Path, feats: int = 64, steps: int = 100, device: str = "cuda"):
+def _load_descod_model(weights_path: Path, feats: int = 64, device: str = "cuda"):
     """
     Load trained DeScoD model (DDPM + ConditionalModel)
     """
@@ -670,7 +662,7 @@ def _load_descod_model(weights_path: Path, feats: int = 64, steps: int = 100, de
     config = {
         "train": {"feats": feats},
         "diffusion": {
-            "num_steps": steps,
+            "num_steps": 100,
             "schedule": "linear",
             "beta_start": 0.0001,
             "beta_end": 0.02,
@@ -771,11 +763,11 @@ def run_method_descod(x_in: np.ndarray, ctx: RunContext) -> np.ndarray:
     
     global _DESCOD_MODEL, _DESCOD_DEVICE
     if _DESCOD_MODEL is None:
+        device = ctx.device or ARGS.device or "cuda"
         _load_descod_model(
-            weights_path=Path(ARGS.descod_weights),
+            Path(ARGS.descod_weights),
             feats=ARGS.descod_feats,
-            steps=ARGS.descod_steps,
-            device=ARGS.device
+            device=device,
         )
     
     # DDPM denoising
@@ -818,7 +810,7 @@ def parse_args():
     ap.add_argument("--split_path", type=str, default=str(ROOT / "common" / "splits.json"))
     ap.add_argument("--split", type=str, default="test")
     ap.add_argument("--methods", type=str, default="proposed", help="comma separated: proposed,dae")
-    ap.add_argument("--noise_rec", type=str, default="bw", choices=["bw", "ma", "em"])
+    ap.add_argument("--noise_rec", type=str, default="bw", help="comma separated: bw,em,ma")
     ap.add_argument("--snrs", type=str, default="0,5,10,15")
     ap.add_argument("--fs_target", type=float, default=250.0)
     ap.add_argument("--start_sec", type=int, default=0)
@@ -876,7 +868,6 @@ def parse_args():
     ap.add_argument("--descod_hop_len", type=int, default=256, help="DeScoD hop length (50%% overlap)")
     ap.add_argument("--descod_batch", type=int, default=16, help="DeScoD inference batch size")
     ap.add_argument("--descod_feats", type=int, default=64, help="DeScoD feature dimension")
-    ap.add_argument("--descod_steps", type=int, default=100, help="DeScoD diffusion steps")
 
     return ap.parse_args()
 
@@ -887,24 +878,65 @@ def main():
 
     snr_levels = [float(s) for s in ARGS.snrs.split(",") if s.strip() != ""]
     method_names = [m.strip() for m in ARGS.methods.split(",") if m.strip() != ""]
-
-    cfg = BenchmarkArgs(
-        split_path=Path(ARGS.split_path),
-        split=ARGS.split,
-        methods=method_names,
-        noise_rec=ARGS.noise_rec,
-        snr_levels=snr_levels,
-        fs_target=float(ARGS.fs_target),
-        start_sec=int(ARGS.start_sec),
-        duration_sec=int(ARGS.duration_sec),
-        seed=int(ARGS.seed),
-        out_dir=Path(ARGS.out_dir),
-        plot_one=bool(ARGS.plot_one),
-        plot_rec=str(ARGS.plot_rec),
-    )
+    noise_recs = [n.strip() for n in ARGS.noise_rec.split(",") if n.strip() != ""]
 
     registry = build_method_registry()
-    run_benchmark(cfg, registry)
+    
+    base_out_dir = Path(ARGS.out_dir)
+    
+    for noise in noise_recs:
+        print(f"\n{'='*60}")
+        print(f"Benchmarking Noise Type: {noise}")
+        print(f"{'='*60}")
+        
+        # If multiple noises are provided or it's a batch run, create sub-directories
+        if len(noise_recs) > 1 or "benchmark" in str(base_out_dir).lower():
+            current_out_dir = base_out_dir / f"benchmark_{noise}"
+        else:
+            current_out_dir = base_out_dir
+            
+        cfg = BenchmarkArgs(
+            split_path=Path(ARGS.split_path),
+            split=ARGS.split,
+            methods=method_names,
+            noise_rec=noise,
+            snr_levels=snr_levels,
+            fs_target=float(ARGS.fs_target),
+            start_sec=int(ARGS.start_sec),
+            duration_sec=int(ARGS.duration_sec),
+            seed=int(ARGS.seed),
+            out_dir=current_out_dir,
+            plot_one=bool(ARGS.plot_one),
+            plot_rec=str(ARGS.plot_rec),
+        )
+        
+        # Run benchmark (saves CSVs and plots for this noise)
+        run_benchmark(cfg, registry)
+        
+        # Generate HTML report (Inlined logic for self-containment)
+        plot_dir = current_out_dir / "plots"
+        if plot_dir.exists():
+            try:
+                plots = sorted(list(plot_dir.glob("*.png")))
+                html = f"""
+                <html>
+                <head><title>Benchmark Results - {noise}</title><style>
+                body {{ font-family: sans-serif; margin: 20px; background: #f4f4f9; }}
+                .container {{ display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }}
+                .card {{ background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); padding: 10px; text-align: center; width: 600px; }}
+                img {{ width: 100%; border-radius: 4px; }}
+                </style></head>
+                <body><h1>ECG Denoising Benchmark: {noise}</h1><div class="container">
+                """
+                for plot in plots:
+                    html += f'<div class="card"><h3>{plot.name}</h3><img src="{plot.name}"></div>'
+                html += "</div></body></html>"
+                
+                with open(plot_dir / "index.html", "w", encoding="utf-8") as f:
+                    f.write(html)
+                print(f"Report generated at: {plot_dir / 'index.html'}")
+            except Exception as e:
+                print(f"[Warning] Failed to generate HTML report: {e}")
 
 
 def apply_preset(args):

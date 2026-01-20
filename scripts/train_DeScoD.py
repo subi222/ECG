@@ -282,9 +282,6 @@ def train_descod(args):
         }
         print(f"[Config] Using default config")
     
-    if args.loss_type:
-        cfg["train"]["loss_type"] = args.loss_type
-        
     print(f"[Config] {cfg}")
     
     # Load splits
@@ -370,18 +367,8 @@ def train_descod(args):
     # More relaxed scheduler for 100 epochs
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=max(1, epochs // 2), gamma=0.1)
     
-    # EMA setup
-    use_ema = args.use_ema if args.use_ema != "" else cfg["train"].get("use_ema", False)
-    # Convert string flag to bool if needed
-    if isinstance(use_ema, str):
-        use_ema = use_ema.lower() == "true"
-        
     ema_helper = None
-    if use_ema:
-        from models.model_DeScoD.main_DeScoD import EMA
-        ema_helper = EMA(mu=0.999)
-        ema_helper.register(model)
-        print("[EMA] Enabled")
+    # EMA is disabled in final official run
     
     # Output directory
     out_dir = ROOT / args.out_dir
@@ -483,11 +470,9 @@ def parse_args():
     # Training
     parser.add_argument('--device', type=str, default='cuda:0', help='Device')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--epochs', type=int, default=0, help='Override epochs (0 to use config)')
+    parser.add_argument('--epochs', type=int, default=100, help='Max epochs (default: 100)')
     parser.add_argument('--batch_size', type=int, default=0, help='Override batch size (0 to use config)')
     parser.add_argument('--patience', type=int, default=0, help='Override early stopping patience (0 to use config)')
-    parser.add_argument('--loss_type', type=str, default='', help='Override loss type (l1/mse)')
-    parser.add_argument('--use_ema', type=str, default='', help='Use EMA during training (true/false)')
     
     # Output
     parser.add_argument('--out_dir', type=str, default='outputs/train_DeScoD',
