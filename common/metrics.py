@@ -1,4 +1,5 @@
-#SNR,RMSE,NRMSE,PRD (채점 기준 통일)
+# ECG Denoising Performance Metrics
+# SNR, RMSE, PRD, PRDN, SSIM
 
 import numpy as np
 
@@ -9,9 +10,21 @@ def remove_dc(x):
 
 def calculate_snr_db(clean, est, remove_mean=True):
     """
-    clean: reference
-    est  : estimate (noisy or processed)
-    remove_mean=True면 clean/est 각각 DC 제거 후 SNR 계산
+    Signal-to-Noise Ratio in dB
+    
+    Parameters
+    ----------
+    clean : array-like
+        Reference signal (ground truth)
+    est : array-like
+        Estimated signal (noisy or processed)
+    remove_mean : bool
+        If True, remove DC offset from both signals before calculation
+    
+    Returns
+    -------
+    snr_db : float
+        SNR in decibels (higher is better)
     """
     clean = np.asarray(clean, dtype=np.float64)
     est   = np.asarray(est, dtype=np.float64)
@@ -30,7 +43,19 @@ def calculate_snr_db(clean, est, remove_mean=True):
 
 def calculate_rmse(clean, processed):
     """
-    RMSE는 DC 제거 후 계산 (run_synthetic_test.py 스타일)
+    Root Mean Square Error (DC offset removed)
+    
+    Parameters
+    ----------
+    clean : array-like
+        Reference signal
+    processed : array-like
+        Processed/denoised signal
+    
+    Returns
+    -------
+    rmse : float
+        RMSE value (lower is better)
     """
     clean0 = remove_dc(np.asarray(clean, dtype=np.float64))
     proc0  = remove_dc(np.asarray(processed, dtype=np.float64))
@@ -39,9 +64,23 @@ def calculate_rmse(clean, processed):
 
 def calculate_prd(clean, processed, remove_mean=True):
     """
-    PRD (%): 100 * ||clean - processed|| / ||clean||
-    보통 clean에 DC/평균을 제거한 버전으로 계산하는 경우가 많아서
-    remove_mean=True를 기본으로 둠.
+    Percent Root-mean-square Difference
+    
+    PRD (%) = 100 * ||clean - processed|| / ||clean||
+    
+    Parameters
+    ----------
+    clean : array-like
+        Reference signal
+    processed : array-like
+        Processed/denoised signal
+    remove_mean : bool
+        If True, remove DC offset before calculation
+    
+    Returns
+    -------
+    prd : float
+        PRD percentage (lower is better)
     """
     clean = np.asarray(clean, dtype=np.float64)
     proc  = np.asarray(processed, dtype=np.float64)
@@ -57,9 +96,24 @@ def calculate_prd(clean, processed, remove_mean=True):
 
 def calculate_prd_normalized(clean, processed, remove_mean=True):
     """
-    PRDN (%): Optimized scaling implemented.
-    Finds the optimal gain factor G that minimizes ||clean - G*processed||.
-    This effectively ignores gain/amplitude differences.
+    Normalized PRD (scale-invariant)
+    
+    Finds optimal gain factor G that minimizes ||clean - G*processed||.
+    This ignores amplitude/gain differences between signals.
+    
+    Parameters
+    ----------
+    clean : array-like
+        Reference signal
+    processed : array-like
+        Processed/denoised signal
+    remove_mean : bool
+        If True, remove DC offset before calculation
+    
+    Returns
+    -------
+    prdn : float
+        Normalized PRD percentage (lower is better)
     """
     clean = np.asarray(clean, dtype=np.float64)
     proc = np.asarray(processed, dtype=np.float64)
@@ -82,9 +136,9 @@ def calculate_prd_normalized(clean, processed, remove_mean=True):
 
 def calculate_ssim(clean, processed, remove_mean=True, window_size=11):
     """
-    SSIM (Structural Similarity Index) for 1D ECG signals.
+    Structural Similarity Index for 1D ECG signals
     
-    Adapted from image SSIM to 1D signals using sliding window approach.
+    Adapted from image SSIM to 1D using sliding window approach.
     SSIM = (2*μ_x*μ_y + C1)(2*σ_xy + C2) / ((μ_x² + μ_y² + C1)(σ_x² + σ_y² + C2))
     
     Parameters
@@ -94,14 +148,14 @@ def calculate_ssim(clean, processed, remove_mean=True, window_size=11):
     processed : array-like
         Processed/denoised ECG signal
     remove_mean : bool
-        Whether to remove DC offset before calculation
+        If True, remove DC offset before calculation
     window_size : int
         Size of the sliding window for local statistics
     
     Returns
     -------
     ssim : float
-        SSIM value in range [0, 1] (higher is better)
+        SSIM value in range [0, 1] (higher is better, 1 = perfect match)
     """
     clean = np.asarray(clean, dtype=np.float64)
     proc = np.asarray(processed, dtype=np.float64)
