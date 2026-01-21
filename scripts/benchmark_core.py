@@ -26,7 +26,7 @@ from common import utils
 DETAIL_HEADER = [
     "method", "rec_id", "noise_rec", "snr_target_db",
     "snr_in", "snr_out", "snr_improve",
-    "rmse", "prd", "prdn", "ssim",
+    "rmse", "prd", "ssim",
     "samples"
 ]
 
@@ -34,7 +34,7 @@ SUMMARY_HEADER = [
     "method", "noise_rec", "snr_target_db", "count",
     "snr_out_mean", "snr_out_std",
     "rmse_mean", "rmse_std",
-    "prd_mean", "prdn_mean", "ssim_mean"
+    "prd_mean", "ssim_mean"
 ]
 
 
@@ -312,20 +312,19 @@ def run_benchmark(
                 snr_out = float(metrics.calculate_snr_db(ref_eval, out_eval, remove_mean=True))
                 rmse = float(metrics.calculate_rmse(ref_eval, out_eval))
                 prd = float(metrics.calculate_prd(ref_eval, out_eval, remove_mean=True))
-                prdn = float(metrics.calculate_prd_normalized(ref_eval, out_eval, remove_mean=True))
                 ssim = float(metrics.calculate_ssim(ref_eval, out_eval, remove_mean=True))
                 snr_improve = float(snr_out - float(snr_in))
 
                 detail_rows.append([
                     method, rec_id, args.noise_rec, float(snr_tgt),
                     float(snr_in), snr_out, snr_improve,
-                    rmse, prd, prdn, ssim,
+                    rmse, prd, ssim,
                     int(N)
                 ])
                 print(
                     f"[{method}] rec={rec_id} snr={snr_tgt}dB "
                     f"in={snr_in:.2f} out={snr_out:.2f} imp={snr_improve:.2f} "
-                    f"rmse={rmse:.6f} prd={prd:.2f}% prdn={prdn:.2f}% "
+                    f"rmse={rmse:.6f} prd={prd:.2f}% "
                     f"ssim={ssim:.4f}"
                 )
 
@@ -368,14 +367,13 @@ def run_benchmark(
         snr_v = [r[idx["snr_out"]] for r in group_rows]
         rmse_v = [r[idx["rmse"]] for r in group_rows]
         prd_v = [r[idx["prd"]] for r in group_rows]
-        prdn_v = [r[idx["prdn"]] for r in group_rows]
         ssim_v = [r[idx["ssim"]] for r in group_rows]
 
         summary_rows.append([
             m, nr, s_tgt, len(group_rows),
             np.mean(snr_v), np.std(snr_v),
             np.mean(rmse_v), np.std(rmse_v),
-            np.mean(prd_v), np.mean(prdn_v),
+            np.mean(prd_v),
             np.mean(ssim_v)
         ])
 
