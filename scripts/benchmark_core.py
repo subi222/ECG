@@ -249,6 +249,15 @@ def run_benchmark(
         repro.seed_all(args.seed)
     else:
         np.random.seed(args.seed)
+    
+    # PyTorch seed for DeScoD reproducibility
+    try:
+        import torch
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed)
+    except ImportError:
+        pass  # PyTorch not available, skip
 
     out_root = Path(args.out_dir)
     csv_dir = out_root / "csv"
